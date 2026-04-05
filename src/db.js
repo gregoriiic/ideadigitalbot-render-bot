@@ -3,6 +3,17 @@ const config = require("./config");
 
 let pool;
 
+const FALLBACK_GROUP_SETTINGS = {
+  chat_id: 0,
+  chat_title: "",
+  welcome_message: "Bienvenido {first_name} a {group}.",
+  warning_message: "{first_name}, esta es una advertencia oficial del grupo.",
+  raffle_rules_text:
+    "Reglas del sorteo:\n1. Una participación por usuario.\n2. Respeta las decisiones de la administración.",
+  raffle_intro_text: "Participa en nuestro sorteo presionando el botón de abajo.",
+  updated_at: null
+};
+
 function hasDbConfig() {
   return Boolean(config.db.host && config.db.name && config.db.user);
 }
@@ -112,81 +123,116 @@ function nowSql() {
 async function getGroupSettings(chatId) {
   const currentPool = getPool();
   if (!currentPool) {
-    return null;
+    return {
+      ...FALLBACK_GROUP_SETTINGS,
+      chat_id: chatId
+    };
   }
 
-  const [rows] = await currentPool.query(
-    "SELECT * FROM bot_group_settings WHERE chat_id = ? LIMIT 1",
-    [chatId]
-  );
+  try {
+    const [rows] = await currentPool.query(
+      "SELECT * FROM bot_group_settings WHERE chat_id = ? LIMIT 1",
+      [chatId]
+    );
 
-  if (!rows[0]) {
-    return null;
+    if (!rows[0]) {
+      return {
+        ...FALLBACK_GROUP_SETTINGS,
+        chat_id: chatId
+      };
+    }
+
+    return rows[0];
+  } catch (_error) {
+    return {
+      ...FALLBACK_GROUP_SETTINGS,
+      chat_id: chatId
+    };
   }
-
-  return rows[0];
 }
 
 async function ensureGroupSettings(chatId, chatTitle = "") {
   const currentPool = getPool();
   if (!currentPool) {
-    return null;
+    return {
+      ...FALLBACK_GROUP_SETTINGS,
+      chat_id: chatId,
+      chat_title: chatTitle || ""
+    };
   }
 
-  await currentPool.query(
-    `INSERT INTO bot_group_settings (chat_id, chat_title, welcome_message, warning_message, raffle_rules_text, raffle_intro_text, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
-     ON DUPLICATE KEY UPDATE
-       chat_title = VALUES(chat_title),
-       updated_at = VALUES(updated_at)`,
-    [
-      chatId,
-      chatTitle || null,
-      "Bienvenido {first_name} a {group}.",
-      "{first_name}, esta es una advertencia oficial del grupo.",
-      "Reglas del sorteo:\n1. Una participación por usuario.\n2. Respeta las decisiones de la administración.",
-      "Participa en nuestro sorteo presionando el botón de abajo.",
-      nowSql()
-    ]
-  );
+  try {
+    await currentPool.query(
+      `INSERT INTO bot_group_settings (chat_id, chat_title, welcome_message, warning_message, raffle_rules_text, raffle_intro_text, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+         chat_title = VALUES(chat_title),
+         updated_at = VALUES(updated_at)`,
+      [
+        chatId,
+        chatTitle || null,
+        FALLBACK_GROUP_SETTINGS.welcome_message,
+        FALLBACK_GROUP_SETTINGS.warning_message,
+        FALLBACK_GROUP_SETTINGS.raffle_rules_text,
+        FALLBACK_GROUP_SETTINGS.raffle_intro_text,
+        nowSql()
+      ]
+    );
 
-  return getGroupSettings(chatId);
+    return getGroupSettings(chatId);
+  } catch (_error) {
+    return {
+      ...FALLBACK_GROUP_SETTINGS,
+      chat_id: chatId,
+      chat_title: chatTitle || ""
+    };
+  }
 }
 
 async function updateGroupSettings(chatId, patch) {
   const currentPool = getPool();
   if (!currentPool) {
-    return null;
+    return {
+      ...(await getGroupSettings(chatId)),
+      ...patch
+    };
   }
 
-  const settings = await ensureGroupSettings(chatId);
-  const merged = {
-    ...settings,
-    ...patch,
-    updated_at: nowSql()
-  };
+  try {
+    const settings = await ensureGroupSettings(chatId);
+    const merged = {
+      ...settings,
+      ...patch,
+      updated_at: nowSql()
+    };
 
-  await currentPool.query(
-    `UPDATE bot_group_settings
-     SET chat_title = ?,
-         welcome_message = ?,
-         warning_message = ?,
-         raffle_rules_text = ?,
-         raffle_intro_text = ?,
-         updated_at = ?
-     WHERE chat_id = ?`,
-    [
-      merged.chat_title || null,
-      merged.welcome_message || null,
-      merged.warning_message || null,
-      merged.raffle_rules_text || null,
-      merged.raffle_intro_text || null,
-      merged.updated_at,
-      chatId
-    ]
-  );
+    await currentPool.query(
+      `UPDATE bot_group_settings
+       SET chat_title = ?,
+           welcome_message = ?,
+           warning_message = ?,
+           raffle_rules_text = ?,
+           raffle_intro_text = ?,
+           updated_at = ?
+       WHERE chat_id = ?`,
+      [
+        merged.chat_title || null,
+        merged.welcome_message || null,
+        merged.warning_message || null,
+        merged.raffle_rules_text || null,
+        merged.raffle_intro_text || null,
+        merged.updated_at,
+        chatId
+      ]
+    );
 
-  return getGroupSettings(chatId);
+    return getGroupSettings(chatId);
+  } catch (_error) {
+    return {
+      ...(await getGroupSettings(chatId)),
+      ...patch
+    };
+  }
 }
 
 async function getUserState(userId) {
