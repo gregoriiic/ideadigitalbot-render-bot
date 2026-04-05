@@ -57,6 +57,41 @@ app.get("/health", async (_req, res) => {
   });
 });
 
+app.get("/api/public/group/:chatId/raffle", async (req, res) => {
+  try {
+    const chatId = Number(req.params.chatId);
+    if (!Number.isFinite(chatId)) {
+      return res.status(400).json({ ok: false, message: "Invalid chat id." });
+    }
+
+    const settings = await ensureGroupSettings(chatId);
+    const round = await getActiveRaffleRound(chatId);
+    const entries = round ? await getRaffleEntries(round.id) : [];
+
+    return res.json({
+      ok: true,
+      group: {
+        chat_id: chatId,
+        chat_title: settings.chat_title || String(chatId)
+      },
+      raffle: {
+        active: Boolean(round && round.status === "active"),
+        round_id: round ? round.id : null,
+        count: entries.length,
+        entries: entries.map((entry) => ({
+          user_id: entry.user_id,
+          username: entry.username || null,
+          first_name: entry.first_name || null,
+          joined_at: entry.joined_at || null
+        }))
+      }
+    });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ ok: false, message: error.message });
+  }
+});
+
 app.get("/telegram/set-webhook", async (_req, res) => {
   const webhookUrl = `${config.appUrl}/telegram/webhook`;
   const result = await setWebhook(webhookUrl);
@@ -304,18 +339,25 @@ async function handleRaffleJoin(callback) {
     return;
   }
 
-  const roundId = Number(String(callback.data || "").split(":")[1]);
-  const round = await getRaffleRoundById(roundId);
+  const rawRoundId = String(callback.data || "").split(":")[1] || "";
+  let round = null;
+
+  if (rawRoundId.indexOf(":") >= 0) {
+    round = await getRaffleRoundById(rawRoundId);
+  } else if (callback.message && callback.message.chat) {
+    round = await getActiveRaffleRound(callback.message.chat.id);
+  }
 
   if (!round || round.status !== "active") {
     await answerCallbackQuery(callback.id, "This raffle is not active anymore.");
     return;
   }
 
+  const roundId = round.id;
   const entryResult = await addRaffleEntry(roundId, callback.from);
   const entries = await getRaffleEntries(roundId);
   const settings = await ensureGroupSettings(round.chat_id);
-  const messageText = buildRaffleMessage(settings, entries);
+  const messageText = buildRaffleMessage(round.chat_id, settings, entries);
   const replyMarkup = buildRaffleKeyboard(roundId, entries.length);
 
   if (round.message_id) {
@@ -368,7 +410,7 @@ async function handleNewRaffle(chat, from) {
   const entries = await getRaffleEntries(round.id);
   const response = await sendMessage(
     chat.id,
-    buildRaffleMessage(settings, entries),
+    buildRaffleMessage(chat.id, settings, entries),
     buildRaffleKeyboard(round.id, entries.length)
   );
 
@@ -424,7 +466,12 @@ async function handleResetRaffle(chatId) {
   const entries = await getRaffleEntries(round.id);
 
   if (round.message_id) {
-    await editMessageText(chatId, round.message_id, buildRaffleMessage(settings, entries), buildRaffleKeyboard(round.id, 0));
+    await editMessageText(
+      chatId,
+      round.message_id,
+      buildRaffleMessage(chatId, settings, entries),
+      buildRaffleKeyboard(round.id, 0)
+    );
   }
 
   await sendMessage(chatId, "The raffle list was reset. Users can register again.");
@@ -555,18 +602,19 @@ function buildGroupHelpText() {
   ].join("\n");
 }
 
-function buildRaffleMessage(settings, entries) {
+function buildRaffleMessage(chatId, settings, entries) {
   const intro = settings.raffle_intro_text || "Participa en nuestro sorteo presionando el botón.";
-  const names = entries.length
-    ? entries.map((entry, index) => `${index + 1}. ${escapeHtml(formatEntryName(entry))}`).join("\n")
-    : "Aún no hay usuarios anotados.";
+  const listUrl = buildRaffleListUrl(chatId);
+  const listLine = listUrl
+    ? `<a href="${escapeHtml(listUrl)}">Ver lista...</a>`
+    : "Ver lista...";
 
   return [
     "<b>Sorteo activo</b>",
     escapeHtml(intro),
     "",
     `<b>Anotados (${entries.length})</b>`,
-    names,
+    listLine,
     "",
     "Usa /Reglas para ver las condiciones."
   ].join("\n");
@@ -656,6 +704,14 @@ function classifyAdmin(item) {
 
 function formatEntryName(entry) {
   return entry.username ? `@${String(entry.username).replace(/^@/, "")}` : entry.first_name || String(entry.user_id);
+}
+
+function buildRaffleListUrl(chatId) {
+  if (!config.panelUrl) {
+    return "";
+  }
+
+  return `${config.panelUrl}/raffle_live.php?chat_id=${encodeURIComponent(String(chatId))}`;
 }
 
 function escapeHtml(value) {

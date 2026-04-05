@@ -83,6 +83,29 @@ function raffleEntriesCollection(chatId) {
   return raffleDoc(chatId).collection("entries");
 }
 
+function buildRoundId(chatId) {
+  return `${chatId}:active`;
+}
+
+function parseRoundId(roundId) {
+  const value = String(roundId || "");
+  const [chatIdPart, raffleKey] = value.split(":");
+
+  if (!chatIdPart || raffleKey !== "active") {
+    return null;
+  }
+
+  const chatId = Number(chatIdPart);
+  if (!Number.isFinite(chatId)) {
+    return null;
+  }
+
+  return {
+    chatId,
+    raffleKey
+  };
+}
+
 async function getGroupSettings(chatId) {
   const db = getFirestore();
   if (!db) {
@@ -183,9 +206,11 @@ async function createRaffleRound(chatId, createdBy) {
     return null;
   }
 
+  const roundId = buildRoundId(chatId);
+
   await raffleDoc(chatId).set(
     {
-      id: "active",
+      id: roundId,
       chat_id: chatId,
       message_id: null,
       created_by: createdBy,
@@ -214,53 +239,135 @@ async function getActiveRaffleRound(chatId) {
   }
 
   const snap = await raffleDoc(chatId).get();
-  return snap.exists ? snap.data() : null;
+  return snap.exists ? { ...snap.data(), id: buildRoundId(chatId), chat_id: chatId } : null;
 }
 
 async function getRaffleRoundById(roundId) {
-  if (String(roundId) !== "active") {
+  const parsed = parseRoundId(roundId);
+  if (!parsed) {
     return null;
   }
 
-  return null;
+  const snap = await raffleDoc(parsed.chatId).get();
+  if (!snap.exists) {
+    return null;
+  }
+
+  return {
+    ...snap.data(),
+    id: buildRoundId(parsed.chatId),
+    chat_id: parsed.chatId
+  };
 }
 
 async function setRaffleRoundMessage(roundId, messageId) {
-  if (String(roundId) !== "active") {
+  const parsed = parseRoundId(roundId);
+  if (!parsed) {
     return null;
   }
 
-  return null;
+  await raffleDoc(parsed.chatId).set(
+    {
+      message_id: messageId,
+      updated_at: nowIso()
+    },
+    { merge: true }
+  );
+
+  return getRaffleRoundById(roundId);
 }
 
 async function getRaffleEntries(roundId) {
-  if (String(roundId) !== "active") {
+  const parsed = parseRoundId(roundId);
+  if (!parsed) {
     return [];
   }
 
-  return [];
+  const snap = await raffleEntriesCollection(parsed.chatId)
+    .orderBy("joined_at", "asc")
+    .get();
+
+  return snap.docs.map((doc) => ({
+    id: doc.id,
+    ...doc.data()
+  }));
 }
 
 async function addRaffleEntry(roundId, user) {
-  if (String(roundId) !== "active") {
+  const parsed = parseRoundId(roundId);
+  if (!parsed) {
     return { inserted: false, duplicate: false };
   }
 
-  return { inserted: false, duplicate: false };
+  const entryRef = raffleEntriesCollection(parsed.chatId).doc(String(user.id));
+  const entrySnap = await entryRef.get();
+
+  if (entrySnap.exists) {
+    return { inserted: false, duplicate: true };
+  }
+
+  await entryRef.set({
+    round_id: buildRoundId(parsed.chatId),
+    user_id: user.id,
+    username: user.username || null,
+    first_name: user.first_name || null,
+    joined_at: nowIso()
+  });
+
+  return { inserted: true, duplicate: false };
 }
 
 async function clearRaffleEntries(roundId) {
-  if (String(roundId) !== "active") {
+  const parsed = parseRoundId(roundId);
+  if (!parsed) {
     return;
   }
+
+  const snapshot = await raffleEntriesCollection(parsed.chatId).get();
+  const batch = getFirestore().batch();
+
+  snapshot.docs.forEach((doc) => {
+    batch.delete(doc.ref);
+  });
+
+  batch.set(
+    raffleDoc(parsed.chatId),
+    {
+      draws_count: 0,
+      last_winner_user_id: null,
+      last_winner_username: null,
+      last_winner_name: null,
+      last_winner_at: null,
+      updated_at: nowIso()
+    },
+    { merge: true }
+  );
+
+  await batch.commit();
 }
 
 async function saveRaffleWinner(roundId, winner) {
-  if (String(roundId) !== "active") {
+  const parsed = parseRoundId(roundId);
+  if (!parsed) {
     return null;
   }
 
-  return null;
+  const round = await getRaffleRoundById(roundId);
+  const drawsCount = Number(round && round.draws_count ? round.draws_count : 0) + 1;
+
+  await raffleDoc(parsed.chatId).set(
+    {
+      draws_count: drawsCount,
+      last_winner_user_id: winner.user_id,
+      last_winner_username: winner.username || null,
+      last_winner_name: winner.first_name || null,
+      last_winner_at: nowIso(),
+      updated_at: nowIso()
+    },
+    { merge: true }
+  );
+
+  return getRaffleRoundById(roundId);
 }
 
 module.exports = {
