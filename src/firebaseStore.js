@@ -130,11 +130,14 @@ async function ensureGroupSettings(chatId, chatTitle = "") {
     return { ...FALLBACK_GROUP_SETTINGS, chat_id: chatId, chat_title: chatTitle };
   }
 
+  const existing = await getGroupSettings(chatId);
+  const resolvedTitle = chatTitle || existing.chat_title || "";
+
   await groupDoc(chatId).set(
     {
       ...FALLBACK_GROUP_SETTINGS,
       chat_id: chatId,
-      chat_title: chatTitle || "",
+      chat_title: resolvedTitle,
       updated_at: nowIso()
     },
     { merge: true }
