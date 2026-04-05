@@ -1,5 +1,6 @@
 const mysql = require("mysql2/promise");
 const config = require("./config");
+const firebaseStore = require("./firebaseStore");
 
 let pool;
 
@@ -16,6 +17,10 @@ const FALLBACK_GROUP_SETTINGS = {
 
 function hasDbConfig() {
   return Boolean(config.db.host && config.db.name && config.db.user);
+}
+
+function useFirebase() {
+  return firebaseStore.hasFirebaseConfig();
 }
 
 function getPool() {
@@ -40,6 +45,10 @@ function getPool() {
 }
 
 async function testDbConnection() {
+  if (useFirebase()) {
+    return firebaseStore.testConnection();
+  }
+
   const currentPool = getPool();
   if (!currentPool) {
     return { ok: false, message: "Database env vars are missing." };
@@ -54,6 +63,10 @@ async function testDbConnection() {
 }
 
 async function ensureSchema() {
+  if (useFirebase()) {
+    return firebaseStore.ensureSchema();
+  }
+
   const currentPool = getPool();
   if (!currentPool) {
     return { ok: false, message: "Database env vars are missing." };
@@ -121,6 +134,10 @@ function nowSql() {
 }
 
 async function getGroupSettings(chatId) {
+  if (useFirebase()) {
+    return firebaseStore.getGroupSettings(chatId);
+  }
+
   const currentPool = getPool();
   if (!currentPool) {
     return {
@@ -152,6 +169,10 @@ async function getGroupSettings(chatId) {
 }
 
 async function ensureGroupSettings(chatId, chatTitle = "") {
+  if (useFirebase()) {
+    return firebaseStore.ensureGroupSettings(chatId, chatTitle);
+  }
+
   const currentPool = getPool();
   if (!currentPool) {
     return {
@@ -190,6 +211,10 @@ async function ensureGroupSettings(chatId, chatTitle = "") {
 }
 
 async function updateGroupSettings(chatId, patch) {
+  if (useFirebase()) {
+    return firebaseStore.updateGroupSettings(chatId, patch);
+  }
+
   const currentPool = getPool();
   if (!currentPool) {
     return {
@@ -236,48 +261,76 @@ async function updateGroupSettings(chatId, patch) {
 }
 
 async function getUserState(userId) {
+  if (useFirebase()) {
+    return firebaseStore.getUserState(userId);
+  }
+
   const currentPool = getPool();
   if (!currentPool) {
     return null;
   }
 
-  const [rows] = await currentPool.query(
-    "SELECT * FROM bot_user_states WHERE user_id = ? LIMIT 1",
-    [userId]
-  );
+  try {
+    const [rows] = await currentPool.query(
+      "SELECT * FROM bot_user_states WHERE user_id = ? LIMIT 1",
+      [userId]
+    );
 
-  return rows[0] || null;
+    return rows[0] || null;
+  } catch (_error) {
+    return null;
+  }
 }
 
 async function setUserState(userId, groupChatId, actionKey) {
+  if (useFirebase()) {
+    return firebaseStore.setUserState(userId, groupChatId, actionKey);
+  }
+
   const currentPool = getPool();
   if (!currentPool) {
     return null;
   }
 
-  await currentPool.query(
-    `INSERT INTO bot_user_states (user_id, group_chat_id, action_key, updated_at)
-     VALUES (?, ?, ?, ?)
-     ON DUPLICATE KEY UPDATE
-       group_chat_id = VALUES(group_chat_id),
-       action_key = VALUES(action_key),
-       updated_at = VALUES(updated_at)`,
-    [userId, groupChatId, actionKey, nowSql()]
-  );
+  try {
+    await currentPool.query(
+      `INSERT INTO bot_user_states (user_id, group_chat_id, action_key, updated_at)
+       VALUES (?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+         group_chat_id = VALUES(group_chat_id),
+         action_key = VALUES(action_key),
+         updated_at = VALUES(updated_at)`,
+      [userId, groupChatId, actionKey, nowSql()]
+    );
 
-  return getUserState(userId);
+    return getUserState(userId);
+  } catch (_error) {
+    return null;
+  }
 }
 
 async function clearUserState(userId) {
+  if (useFirebase()) {
+    return firebaseStore.clearUserState(userId);
+  }
+
   const currentPool = getPool();
   if (!currentPool) {
     return;
   }
 
-  await currentPool.query("DELETE FROM bot_user_states WHERE user_id = ?", [userId]);
+  try {
+    await currentPool.query("DELETE FROM bot_user_states WHERE user_id = ?", [userId]);
+  } catch (_error) {
+    return;
+  }
 }
 
 async function createRaffleRound(chatId, createdBy) {
+  if (useFirebase()) {
+    return firebaseStore.createRaffleRound(chatId, createdBy);
+  }
+
   const currentPool = getPool();
   if (!currentPool) {
     return null;
@@ -298,6 +351,10 @@ async function createRaffleRound(chatId, createdBy) {
 }
 
 async function getActiveRaffleRound(chatId) {
+  if (useFirebase()) {
+    return firebaseStore.getActiveRaffleRound(chatId);
+  }
+
   const currentPool = getPool();
   if (!currentPool) {
     return null;
@@ -312,6 +369,10 @@ async function getActiveRaffleRound(chatId) {
 }
 
 async function getRaffleRoundById(roundId) {
+  if (useFirebase()) {
+    return firebaseStore.getRaffleRoundById(roundId);
+  }
+
   const currentPool = getPool();
   if (!currentPool) {
     return null;
@@ -326,6 +387,10 @@ async function getRaffleRoundById(roundId) {
 }
 
 async function setRaffleRoundMessage(roundId, messageId) {
+  if (useFirebase()) {
+    return firebaseStore.setRaffleRoundMessage(roundId, messageId);
+  }
+
   const currentPool = getPool();
   if (!currentPool) {
     return null;
@@ -340,6 +405,10 @@ async function setRaffleRoundMessage(roundId, messageId) {
 }
 
 async function getRaffleEntries(roundId) {
+  if (useFirebase()) {
+    return firebaseStore.getRaffleEntries(roundId);
+  }
+
   const currentPool = getPool();
   if (!currentPool) {
     return [];
@@ -354,6 +423,10 @@ async function getRaffleEntries(roundId) {
 }
 
 async function addRaffleEntry(roundId, user) {
+  if (useFirebase()) {
+    return firebaseStore.addRaffleEntry(roundId, user);
+  }
+
   const currentPool = getPool();
   if (!currentPool) {
     return { inserted: false, duplicate: false };
@@ -382,6 +455,10 @@ async function addRaffleEntry(roundId, user) {
 }
 
 async function clearRaffleEntries(roundId) {
+  if (useFirebase()) {
+    return firebaseStore.clearRaffleEntries(roundId);
+  }
+
   const currentPool = getPool();
   if (!currentPool) {
     return;
@@ -402,6 +479,10 @@ async function clearRaffleEntries(roundId) {
 }
 
 async function saveRaffleWinner(roundId, winner) {
+  if (useFirebase()) {
+    return firebaseStore.saveRaffleWinner(roundId, winner);
+  }
+
   const currentPool = getPool();
   if (!currentPool) {
     return null;

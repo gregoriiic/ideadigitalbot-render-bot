@@ -8,6 +8,11 @@ module.exports = {
   botUsername: (process.env.BOT_USERNAME || "").replace(/^@/, ""),
   botToken: process.env.BOT_TOKEN || "",
   webhookSecret: process.env.WEBHOOK_SECRET || "",
+  firebase: {
+    projectId: process.env.FIREBASE_PROJECT_ID || "",
+    clientEmail: process.env.FIREBASE_CLIENT_EMAIL || "",
+    privateKey: process.env.FIREBASE_PRIVATE_KEY || ""
+  },
   db: {
     host: process.env.DB_HOST || "",
     port: Number(process.env.DB_PORT || 3306),
