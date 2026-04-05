@@ -4,6 +4,7 @@ const config = require("./config");
 const {
   sendMessage,
   editMessageText,
+  deleteMessage,
   answerCallbackQuery,
   getChatMember,
   getChatAdministrators,
@@ -179,22 +180,26 @@ async function handleMessage(message) {
 
   if (command === "/help") {
     await sendMessage(chat.id, buildGroupHelpText());
+    await cleanupCommandMessage(message);
     return;
   }
 
   if (command === "/panelbot") {
     await handlePanelBotCommand(chat, from);
+    await cleanupCommandMessage(message);
     return;
   }
 
   if (command === "/reglas") {
     const settings = await ensureGroupSettings(chat.id, chat.title || "");
     await sendMessage(chat.id, settings.raffle_rules_text || "No rules configured yet.");
+    await cleanupCommandMessage(message);
     return;
   }
 
   if (command === "/staff") {
     await handleStaffCommand(chat.id);
+    await cleanupCommandMessage(message);
     return;
   }
 
@@ -204,21 +209,25 @@ async function handleMessage(message) {
 
   if (command === "/nsorteo") {
     await handleNewRaffle(chat, from);
+    await cleanupCommandMessage(message);
     return;
   }
 
   if (command === "/sortear") {
     await handleDrawWinner(chat.id);
+    await cleanupCommandMessage(message);
     return;
   }
 
   if (command === "/reset") {
     await handleResetRaffle(chat.id);
+    await cleanupCommandMessage(message);
     return;
   }
 
   if (command === "/warn") {
     await handleWarnCommand(chat.id, message);
+    await cleanupCommandMessage(message);
   }
 }
 
@@ -557,6 +566,21 @@ async function handleWelcomeMessage(chat, newMembers) {
 async function isGroupAdmin(chatId, userId) {
   const member = await getChatMember(chatId, userId);
   return member.ok && isMemberAdminStatus(member.result.status);
+}
+
+async function cleanupCommandMessage(message) {
+  const chat = message && message.chat ? message.chat : null;
+  const messageId = message ? message.message_id : null;
+
+  if (!chat || !messageId || chat.type === "private") {
+    return;
+  }
+
+  try {
+    await deleteMessage(chat.id, messageId);
+  } catch (_error) {
+    return;
+  }
 }
 
 function isMemberAdminStatus(status) {

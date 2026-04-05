@@ -39,6 +39,13 @@ async function editMessageText(chatId, messageId, text, extra = {}) {
   });
 }
 
+async function deleteMessage(chatId, messageId) {
+  return telegramRequest("deleteMessage", {
+    chat_id: chatId,
+    message_id: messageId
+  });
+}
+
 async function answerCallbackQuery(callbackQueryId, text) {
   return telegramRequest("answerCallbackQuery", {
     callback_query_id: callbackQueryId,
@@ -71,6 +78,7 @@ async function setWebhook(webhookUrl) {
 module.exports = {
   sendMessage,
   editMessageText,
+  deleteMessage,
   answerCallbackQuery,
   getChatMember,
   getChatAdministrators,
