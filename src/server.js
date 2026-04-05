@@ -299,6 +299,11 @@ async function handleConfigCallback(callback) {
 }
 
 async function handleRaffleJoin(callback) {
+  if (!(await isDatabaseAvailable())) {
+    await answerCallbackQuery(callback.id, "Database is unavailable right now.");
+    return;
+  }
+
   const roundId = Number(String(callback.data || "").split(":")[1]);
   const round = await getRaffleRoundById(roundId);
 
@@ -353,6 +358,11 @@ async function handlePanelBotCommand(chat, from) {
 }
 
 async function handleNewRaffle(chat, from) {
+  if (!(await isDatabaseAvailable())) {
+    await sendMessage(chat.id, "The raffle database is unavailable right now.");
+    return;
+  }
+
   const settings = await ensureGroupSettings(chat.id, chat.title || "");
   const round = await createRaffleRound(chat.id, from.id);
   const entries = await getRaffleEntries(round.id);
@@ -368,6 +378,11 @@ async function handleNewRaffle(chat, from) {
 }
 
 async function handleDrawWinner(chatId) {
+  if (!(await isDatabaseAvailable())) {
+    await sendMessage(chatId, "The raffle database is unavailable right now.");
+    return;
+  }
+
   const round = await getActiveRaffleRound(chatId);
 
   if (!round) {
@@ -392,6 +407,11 @@ async function handleDrawWinner(chatId) {
 }
 
 async function handleResetRaffle(chatId) {
+  if (!(await isDatabaseAvailable())) {
+    await sendMessage(chatId, "The raffle database is unavailable right now.");
+    return;
+  }
+
   const round = await getActiveRaffleRound(chatId);
 
   if (!round) {
@@ -411,6 +431,11 @@ async function handleResetRaffle(chatId) {
 }
 
 async function handleWarnCommand(chatId, message) {
+  if (!(await isDatabaseAvailable())) {
+    await sendMessage(chatId, "The configuration database is unavailable right now.");
+    return;
+  }
+
   if (!message.reply_to_message || !message.reply_to_message.from) {
     await sendMessage(chatId, "Reply to a user message to send a warning.");
     return;
@@ -447,6 +472,10 @@ async function handleStaffCommand(chatId) {
 }
 
 async function handleWelcomeMessage(chat, newMembers) {
+  if (!(await isDatabaseAvailable())) {
+    return;
+  }
+
   const settings = await ensureGroupSettings(chat.id, chat.title || "");
   const template = settings.welcome_message || "Bienvenido {first_name} a {group}.";
 
@@ -636,6 +665,11 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
+}
+
+async function isDatabaseAvailable() {
+  const status = await testDbConnection();
+  return Boolean(status && status.ok);
 }
 
 async function startServer() {

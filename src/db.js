@@ -48,57 +48,61 @@ async function ensureSchema() {
     return { ok: false, message: "Database env vars are missing." };
   }
 
-  await currentPool.query(`
-    CREATE TABLE IF NOT EXISTS bot_group_settings (
-      chat_id BIGINT PRIMARY KEY,
-      chat_title VARCHAR(255) NULL,
-      welcome_message TEXT NULL,
-      warning_message TEXT NULL,
-      raffle_rules_text TEXT NULL,
-      raffle_intro_text TEXT NULL,
-      updated_at DATETIME NOT NULL
-    )
-  `);
+  try {
+    await currentPool.query(`
+      CREATE TABLE IF NOT EXISTS bot_group_settings (
+        chat_id BIGINT PRIMARY KEY,
+        chat_title VARCHAR(255) NULL,
+        welcome_message TEXT NULL,
+        warning_message TEXT NULL,
+        raffle_rules_text TEXT NULL,
+        raffle_intro_text TEXT NULL,
+        updated_at DATETIME NOT NULL
+      )
+    `);
 
-  await currentPool.query(`
-    CREATE TABLE IF NOT EXISTS bot_user_states (
-      user_id BIGINT PRIMARY KEY,
-      group_chat_id BIGINT NOT NULL,
-      action_key VARCHAR(100) NOT NULL,
-      updated_at DATETIME NOT NULL
-    )
-  `);
+    await currentPool.query(`
+      CREATE TABLE IF NOT EXISTS bot_user_states (
+        user_id BIGINT PRIMARY KEY,
+        group_chat_id BIGINT NOT NULL,
+        action_key VARCHAR(100) NOT NULL,
+        updated_at DATETIME NOT NULL
+      )
+    `);
 
-  await currentPool.query(`
-    CREATE TABLE IF NOT EXISTS bot_raffle_rounds (
-      id BIGINT AUTO_INCREMENT PRIMARY KEY,
-      chat_id BIGINT NOT NULL,
-      message_id BIGINT NULL,
-      created_by BIGINT NOT NULL,
-      status VARCHAR(40) NOT NULL DEFAULT 'active',
-      draws_count INT NOT NULL DEFAULT 0,
-      last_winner_user_id BIGINT NULL,
-      last_winner_username VARCHAR(255) NULL,
-      last_winner_name VARCHAR(255) NULL,
-      last_winner_at DATETIME NULL,
-      created_at DATETIME NOT NULL,
-      updated_at DATETIME NOT NULL
-    )
-  `);
+    await currentPool.query(`
+      CREATE TABLE IF NOT EXISTS bot_raffle_rounds (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        chat_id BIGINT NOT NULL,
+        message_id BIGINT NULL,
+        created_by BIGINT NOT NULL,
+        status VARCHAR(40) NOT NULL DEFAULT 'active',
+        draws_count INT NOT NULL DEFAULT 0,
+        last_winner_user_id BIGINT NULL,
+        last_winner_username VARCHAR(255) NULL,
+        last_winner_name VARCHAR(255) NULL,
+        last_winner_at DATETIME NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL
+      )
+    `);
 
-  await currentPool.query(`
-    CREATE TABLE IF NOT EXISTS bot_raffle_entries (
-      id BIGINT AUTO_INCREMENT PRIMARY KEY,
-      round_id BIGINT NOT NULL,
-      user_id BIGINT NOT NULL,
-      username VARCHAR(255) NULL,
-      first_name VARCHAR(255) NULL,
-      joined_at DATETIME NOT NULL,
-      UNIQUE KEY uniq_round_user (round_id, user_id)
-    )
-  `);
+    await currentPool.query(`
+      CREATE TABLE IF NOT EXISTS bot_raffle_entries (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        round_id BIGINT NOT NULL,
+        user_id BIGINT NOT NULL,
+        username VARCHAR(255) NULL,
+        first_name VARCHAR(255) NULL,
+        joined_at DATETIME NOT NULL,
+        UNIQUE KEY uniq_round_user (round_id, user_id)
+      )
+    `);
 
-  return { ok: true, message: "Schema ready." };
+    return { ok: true, message: "Schema ready." };
+  } catch (error) {
+    return { ok: false, message: error.message };
+  }
 }
 
 function nowSql() {
