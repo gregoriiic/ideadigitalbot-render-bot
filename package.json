@@ -1,0 +1,19 @@
+{
+  "name": "ideadigitalbot-render-bot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Telegram bot backend for Ideadigital Bot on Render",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "dotenv": "^16.6.1",
+    "express": "^4.21.2",
+    "mysql2": "^3.15.2"
+  }
+}
