@@ -6,6 +6,7 @@ Backend separado para ejecutar el bot de Telegram en Render.
 
 - `APP_URL`
 - `PANEL_URL`
+- `BOT_USERNAME`
 - `BOT_TOKEN`
 - `WEBHOOK_SECRET`
 - `DB_HOST`
@@ -20,6 +21,16 @@ Backend separado para ejecutar el bot de Telegram en Render.
 - `GET /health`
 - `GET /telegram/set-webhook`
 - `POST /telegram/webhook`
+
+## Comandos base
+
+- `/NSorteo`
+- `/Sortear`
+- `/Reset`
+- `/Reglas`
+- `/Staff`
+- `/Warn`
+- `/PanelBot`
 
 ## Deploy en Render
 

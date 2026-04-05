@@ -5,6 +5,7 @@ module.exports = {
   port: Number(process.env.PORT || 10000),
   appUrl: (process.env.APP_URL || "").replace(/\/$/, ""),
   panelUrl: (process.env.PANEL_URL || "https://ideadigitalbots.xo.je").replace(/\/$/, ""),
+  botUsername: (process.env.BOT_USERNAME || "").replace(/^@/, ""),
   botToken: process.env.BOT_TOKEN || "",
   webhookSecret: process.env.WEBHOOK_SECRET || "",
   db: {

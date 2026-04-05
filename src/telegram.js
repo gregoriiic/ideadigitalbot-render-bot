@@ -29,15 +29,50 @@ async function sendMessage(chatId, text, extra = {}) {
   });
 }
 
+async function editMessageText(chatId, messageId, text, extra = {}) {
+  return telegramRequest("editMessageText", {
+    chat_id: chatId,
+    message_id: messageId,
+    text,
+    parse_mode: "HTML",
+    ...extra
+  });
+}
+
+async function answerCallbackQuery(callbackQueryId, text) {
+  return telegramRequest("answerCallbackQuery", {
+    callback_query_id: callbackQueryId,
+    text,
+    show_alert: false
+  });
+}
+
+async function getChatMember(chatId, userId) {
+  return telegramRequest("getChatMember", {
+    chat_id: chatId,
+    user_id: userId
+  });
+}
+
+async function getChatAdministrators(chatId) {
+  return telegramRequest("getChatAdministrators", {
+    chat_id: chatId
+  });
+}
+
 async function setWebhook(webhookUrl) {
   return telegramRequest("setWebhook", {
     url: webhookUrl,
     secret_token: config.webhookSecret || undefined,
-    allowed_updates: ["message"]
+    allowed_updates: ["message", "callback_query"]
   });
 }
 
 module.exports = {
   sendMessage,
+  editMessageText,
+  answerCallbackQuery,
+  getChatMember,
+  getChatAdministrators,
   setWebhook
 };
