@@ -450,13 +450,20 @@ async function handleDrawWinner(chatId) {
   }
 
   const winner = entries[Math.floor(Math.random() * entries.length)];
-  await saveRaffleWinner(round.id, winner);
+  const savedRound = await saveRaffleWinner(round.id, winner);
 
   const mention = winner.username
     ? `@${String(winner.username).replace(/^@/, "")}`
     : escapeHtml(winner.first_name || String(winner.user_id));
 
-  await sendMessage(chatId, `Winner selected:\n<b>${mention}</b>`);
+  const drawsCount = String(
+    Number(savedRound && savedRound.draws_count ? savedRound.draws_count : (round.draws_count || 0) + 1)
+  ).padStart(2, "0");
+
+  await sendMessage(
+    chatId,
+    `Se han sorteado (${drawsCount}) Usuarios.\n\nEl ganador es:\n<b>${mention}</b>`
+  );
 }
 
 async function handleResetRaffle(chatId) {
