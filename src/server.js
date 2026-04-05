@@ -59,6 +59,10 @@ app.get("/health", async (_req, res) => {
 
 app.get("/api/public/group/:chatId/raffle", async (req, res) => {
   try {
+    res.set("Access-Control-Allow-Origin", config.panelUrl || "*");
+    res.set("Access-Control-Allow-Methods", "GET, OPTIONS");
+    res.set("Access-Control-Allow-Headers", "Content-Type");
+
     const chatId = Number(req.params.chatId);
     if (!Number.isFinite(chatId)) {
       return res.status(400).json({ ok: false, message: "Invalid chat id." });
@@ -90,6 +94,13 @@ app.get("/api/public/group/:chatId/raffle", async (req, res) => {
     console.error(error);
     return res.status(500).json({ ok: false, message: error.message });
   }
+});
+
+app.options("/api/public/group/:chatId/raffle", (req, res) => {
+  res.set("Access-Control-Allow-Origin", config.panelUrl || "*");
+  res.set("Access-Control-Allow-Methods", "GET, OPTIONS");
+  res.set("Access-Control-Allow-Headers", "Content-Type");
+  return res.status(204).end();
 });
 
 app.get("/telegram/set-webhook", async (_req, res) => {
