@@ -71,6 +71,19 @@ const spamTracker = new Map();
 const activeTicketTimers = new Map();
 const TICKET_INACTIVITY_MS = 10 * 60 * 1000;
 
+async function resolvePanelBot(req) {
+  const source = req.method === "GET" ? (req.query || {}) : (req.body || {});
+  const ownerKey = String(source.owner_key || "").trim();
+  const botId = String(source.bot_id || "").trim();
+
+  if (!ownerKey || !botId) {
+    return null;
+  }
+
+  const bots = await listBotsByOwner(ownerKey);
+  return bots.find((item) => String(item.id) === botId) || null;
+}
+
 app.get("/", async (_req, res) => {
   const dbStatus = await testDbConnection();
   res.json({
@@ -142,13 +155,16 @@ app.get("/api/panel/group/:chatId/settings", async (req, res) => {
   }
 
   try {
-    const chatId = Number(req.params.chatId);
-    if (!Number.isFinite(chatId)) {
-      return res.status(400).json({ ok: false, message: "Invalid chat id." });
-    }
+    const bot = await resolvePanelBot(req);
+    return runWithBot(bot, async () => {
+      const chatId = Number(req.params.chatId);
+      if (!Number.isFinite(chatId)) {
+        return res.status(400).json({ ok: false, message: "Invalid chat id." });
+      }
 
-    const settings = await ensureGroupSettings(chatId);
-    return res.json({ ok: true, settings });
+      const settings = await ensureGroupSettings(chatId);
+      return res.json({ ok: true, settings, bot_id: bot ? bot.id : "default" });
+    });
   } catch (error) {
     console.error(error);
     return res.status(500).json({ ok: false, message: error.message });
@@ -161,8 +177,11 @@ app.get("/api/panel/groups", async (req, res) => {
   }
 
   try {
-    const groups = await listGroups();
-    return res.json({ ok: true, groups });
+    const bot = await resolvePanelBot(req);
+    return runWithBot(bot, async () => {
+      const groups = await listGroups();
+      return res.json({ ok: true, groups, bot_id: bot ? bot.id : "default" });
+    });
   } catch (error) {
     console.error(error);
     return res.status(500).json({ ok: false, message: error.message });
@@ -175,61 +194,64 @@ app.post("/api/panel/group/:chatId/settings", async (req, res) => {
   }
 
   try {
-    const chatId = Number(req.params.chatId);
-    if (!Number.isFinite(chatId)) {
-      return res.status(400).json({ ok: false, message: "Invalid chat id." });
-    }
+    const bot = await resolvePanelBot(req);
+    return runWithBot(bot, async () => {
+      const chatId = Number(req.params.chatId);
+      if (!Number.isFinite(chatId)) {
+        return res.status(400).json({ ok: false, message: "Invalid chat id." });
+      }
 
-    const current = await ensureGroupSettings(chatId);
-    const body = req.body || {};
-    const patch = {};
+      const current = await ensureGroupSettings(chatId);
+      const body = req.body || {};
+      const patch = {};
 
-    if (typeof body.group_language === "string") {
-      patch.group_language = normalizeLocale(body.group_language);
-    }
+      if (typeof body.group_language === "string") {
+        patch.group_language = normalizeLocale(body.group_language);
+      }
 
-    if (typeof body.welcome_message === "string") {
-      patch.welcome_message = body.welcome_message.trim();
-    }
+      if (typeof body.welcome_message === "string") {
+        patch.welcome_message = body.welcome_message.trim();
+      }
 
-    if (typeof body.warning_message === "string") {
-      patch.warning_message = body.warning_message.trim();
-    }
+      if (typeof body.warning_message === "string") {
+        patch.warning_message = body.warning_message.trim();
+      }
 
-    if (typeof body.raffle_rules_text === "string") {
-      patch.raffle_rules_text = body.raffle_rules_text.trim();
-    }
+      if (typeof body.raffle_rules_text === "string") {
+        patch.raffle_rules_text = body.raffle_rules_text.trim();
+      }
 
-    if (typeof body.group_rules_text === "string") {
-      patch.group_rules_text = body.group_rules_text.trim();
-    }
+      if (typeof body.group_rules_text === "string") {
+        patch.group_rules_text = body.group_rules_text.trim();
+      }
 
-    if (typeof body.raffle_intro_text === "string") {
-      patch.raffle_intro_text = body.raffle_intro_text.trim();
-    }
+      if (typeof body.raffle_intro_text === "string") {
+        patch.raffle_intro_text = body.raffle_intro_text.trim();
+      }
 
-    if (typeof body.antispam_enabled === "boolean") {
-      patch.antispam_enabled = body.antispam_enabled;
-    }
+      if (typeof body.antispam_enabled === "boolean") {
+        patch.antispam_enabled = body.antispam_enabled;
+      }
 
-    if (typeof body.antispam_action === "string") {
-      patch.antispam_action = body.antispam_action.trim();
-    }
+      if (typeof body.antispam_action === "string") {
+        patch.antispam_action = body.antispam_action.trim();
+      }
 
-    if (typeof body.antispam_duration_text === "string") {
-      patch.antispam_duration_text = body.antispam_duration_text.trim();
-    }
+      if (typeof body.antispam_duration_text === "string") {
+        patch.antispam_duration_text = body.antispam_duration_text.trim();
+      }
 
-    if (typeof body.group_link_enabled === "boolean") {
-      patch.group_link_enabled = body.group_link_enabled;
-    }
+      if (typeof body.group_link_enabled === "boolean") {
+        patch.group_link_enabled = body.group_link_enabled;
+      }
 
-    if (typeof body.group_link_value === "string") {
-      patch.group_link_value = body.group_link_value.trim();
-    }
+      if (typeof body.group_link_value === "string") {
+        patch.group_link_value = body.group_link_value.trim();
+      }
 
-    const settings = await updateGroupSettings(chatId, patch);
-    return res.json({ ok: true, previous: current, settings });
+      const settings = await updateGroupSettings(chatId, patch);
+      return res.json({ ok: true, previous: current, settings, bot_id: bot ? bot.id : "default" });
+    });
   } catch (error) {
     console.error(error);
     return res.status(500).json({ ok: false, message: error.message });
