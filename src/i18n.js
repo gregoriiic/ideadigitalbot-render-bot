@@ -61,6 +61,17 @@ const STRINGS = {
     private_group_picker_body: "Selecciona el grupo que quieres editar desde este menu privado.",
     private_no_groups:
       "Aun no tienes grupos sincronizados. Agrega el bot a un grupo como administrador y luego usa /start aqui para administrarlo.",
+    ticket_private_prompt:
+      "Envia tu consulta aqui y seras atendido por un administrador.",
+    ticket_created:
+      "Se ha generado un ticket n° {number}. Pronto sera atendido por un administrador.",
+    ticket_support_missing:
+      "Aun no hay un grupo de customer service configurado para esta cuenta.",
+    ticket_support_forward_title: "Nuevo ticket n° {number}",
+    ticket_support_from: "Usuario: {user}",
+    ticket_support_group: "Grupo principal: {group}",
+    ticket_support_message: "Consulta: {message}",
+    ticket_reply_sent: "Respuesta enviada al usuario.",
     private_help_title: "Ayuda privada",
     private_help_body:
       "Usa el menu privado para editar:\n- Mensaje de bienvenida\n- Mensaje de advertencia\n- Reglas del sorteo\n- Texto principal del sorteo\n- Idioma del grupo",

@@ -307,6 +307,13 @@ async function handleMessage(message) {
     return;
   }
 
+  if (message.reply_to_message && text && !text.startsWith("/")) {
+    const replied = await handleSupportReply(chat, from, message);
+    if (replied) {
+      return;
+    }
+  }
+
   if (!text.startsWith("/")) {
     await maybeHandleAntispam(chat, from, message);
     return;
@@ -342,6 +349,12 @@ async function handleMessage(message) {
 
   if (command === "/link") {
     await handleGroupLinkCommand(chat.id, chat.title || "");
+    await cleanupCommandMessage(message);
+    return;
+  }
+
+  if (command === "/ticket") {
+    await handleTicketCommand(chat, from, message);
     await cleanupCommandMessage(message);
     return;
   }
@@ -404,6 +417,11 @@ async function handlePrivateText(message, text) {
 
   const state = await getUserState(from.id);
   if (!state) {
+    return;
+  }
+
+  if (state.action_key === "await_ticket_message") {
+    await handlePrivateTicketMessage(message, text, state);
     return;
   }
 
@@ -1262,6 +1280,97 @@ async function handleGroupLinkCommand(chatId, chatTitle = "") {
     chatId,
     `<b>Enlace del grupo</b>\n${escapeHtml(settings.group_link_value)}`
   );
+}
+
+async function handleTicketCommand(chat, from, message) {
+  const profile = await getUserProfile(from.id);
+  const supportChatId = profile && Number.isFinite(Number(profile.support_group_chat_id))
+    ? Number(profile.support_group_chat_id)
+    : null;
+
+  if (!supportChatId) {
+    await sendMessage(chat.id, tForLocale("es", "ticket_support_missing"));
+    return;
+  }
+
+  await setUserState(from.id, chat.id, "await_ticket_message");
+  await sendMessage(from.id, tForLocale("es", "ticket_private_prompt"));
+}
+
+async function handlePrivateTicketMessage(message, text, state) {
+  const from = message.from || {};
+  const mainChatId = Number(state.group_chat_id);
+  const profile = await getUserProfile(from.id);
+  const supportChatId = profile && Number.isFinite(Number(profile.support_group_chat_id))
+    ? Number(profile.support_group_chat_id)
+    : null;
+
+  if (!supportChatId) {
+    await clearUserState(from.id);
+    await sendMessage(message.chat.id, tForLocale("es", "ticket_support_missing"));
+    return;
+  }
+
+  const mainSettings = await ensureGroupSettings(mainChatId);
+  const ticket = await createSupportTicket(mainChatId, supportChatId, from, text);
+
+  if (!ticket) {
+    await clearUserState(from.id);
+    await sendMessage(message.chat.id, tForLocale("es", "database_unavailable"));
+    return;
+  }
+
+  const userLabel = from.username
+    ? `@${String(from.username).replace(/^@/, "")}`
+    : [from.first_name, from.last_name].filter(Boolean).join(" ") || String(from.id);
+
+  const forwarded = await sendMessage(
+    supportChatId,
+    [
+      `<b>${escapeHtml(tForLocale("es", "ticket_support_forward_title", { number: ticket.ticket_number }))}</b>`,
+      escapeHtml(tForLocale("es", "ticket_support_from", { user: userLabel })),
+      escapeHtml(tForLocale("es", "ticket_support_group", { group: mainSettings.chat_title || String(mainChatId) })),
+      "",
+      escapeHtml(tForLocale("es", "ticket_support_message", { message: text }))
+    ].join("\n")
+  );
+
+  if (forwarded && forwarded.ok && forwarded.result && forwarded.result.message_id) {
+    await attachSupportTicketMessage(ticket.id, forwarded.result.message_id);
+  }
+
+  await clearUserState(from.id);
+  await sendMessage(
+    message.chat.id,
+    escapeHtml(tForLocale("es", "ticket_created", { number: ticket.ticket_number }))
+  );
+}
+
+async function handleSupportReply(chat, from, message) {
+  if (!(await isGroupAdmin(chat.id, from.id))) {
+    return false;
+  }
+
+  if (!message.reply_to_message || !message.reply_to_message.message_id) {
+    return false;
+  }
+
+  const ticket = await getSupportTicketByReply(chat.id, message.reply_to_message.message_id);
+  if (!ticket) {
+    return false;
+  }
+
+  await sendMessage(
+    ticket.user_id,
+    [
+      "<b>Respuesta de soporte</b>",
+      "",
+      escapeHtml(message.text || "")
+    ].join("\n")
+  ).catch(() => null);
+
+  await sendMessage(chat.id, tForLocale("es", "ticket_reply_sent")).catch(() => null);
+  return true;
 }
 
 function formatAdminMention(item) {
