@@ -506,11 +506,26 @@ function getLocaleLabel(locale) {
 
 function getDefaultGroupSettings(locale = "es") {
   const code = normalizeLocale(locale);
+  const defaultGroupRulesByLocale = {
+    es: "Reglamento del grupo:\n1. Respeta a los demas miembros.\n2. No envies spam.\n3. Sigue las instrucciones de la administracion.",
+    en: "Group rules:\n1. Respect other members.\n2. Do not send spam.\n3. Follow the admin team instructions.",
+    fr: "Reglement du groupe:\n1. Respectez les autres membres.\n2. N'envoyez pas de spam.\n3. Suivez les instructions de l'administration.",
+    ar: "قواعد المجموعة:\n1. احترم الاعضاء.\n2. لا ترسل رسائل عشوائية.\n3. اتبع تعليمات الادارة.",
+    pt: "Regras do grupo:\n1. Respeite os outros membros.\n2. Nao envie spam.\n3. Siga as instrucoes da administracao.",
+    it: "Regolamento del gruppo:\n1. Rispetta gli altri membri.\n2. Non inviare spam.\n3. Segui le istruzioni dell'amministrazione."
+  };
+
   return {
     chat_id: 0,
     chat_title: "",
     group_language: code,
     ...GROUP_TEMPLATE_DEFAULTS[code],
+    group_rules_text: defaultGroupRulesByLocale[code] || defaultGroupRulesByLocale.es,
+    antispam_enabled: false,
+    antispam_action: "warn",
+    antispam_duration_text: "24 h",
+    group_link_enabled: false,
+    group_link_value: "",
     topics_policy: "Permitido",
     banned_words_text: "",
     repeated_messages_policy: "Eliminar mensajes repetidos despues de 3 repeticiones.",

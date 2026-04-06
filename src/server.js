@@ -48,7 +48,8 @@ const ACTION_TO_FIELD = {
   rules: "group_rules_text",
   raffle_intro: "raffle_intro_text",
   language: "group_language",
-  antispam_duration: "antispam_duration_text"
+  antispam_duration: "antispam_duration_text",
+  group_link_value: "group_link_value"
 };
 
 const spamTracker = new Map();
@@ -202,6 +203,14 @@ app.post("/api/panel/group/:chatId/settings", async (req, res) => {
       patch.antispam_duration_text = body.antispam_duration_text.trim();
     }
 
+    if (typeof body.group_link_enabled === "boolean") {
+      patch.group_link_enabled = body.group_link_enabled;
+    }
+
+    if (typeof body.group_link_value === "string") {
+      patch.group_link_value = body.group_link_value.trim();
+    }
+
     const settings = await updateGroupSettings(chatId, patch);
     return res.json({ ok: true, previous: current, settings });
   } catch (error) {
@@ -322,6 +331,12 @@ async function handleMessage(message) {
 
   if (command === "/staff") {
     await handleStaffCommand(chat.id, chat.title || "");
+    await cleanupCommandMessage(message);
+    return;
+  }
+
+  if (command === "/link") {
+    await handleGroupLinkCommand(chat.id, chat.title || "");
     await cleanupCommandMessage(message);
     return;
   }
@@ -498,6 +513,21 @@ async function handleCallbackQuery(callback) {
     return;
   }
 
+  if (data.indexOf("grouplink:") === 0) {
+    await handleGroupLinkActionCallback(callback);
+    return;
+  }
+
+  if (data.indexOf("langpick:") === 0) {
+    await handleLanguagePickCallback(callback);
+    return;
+  }
+
+  if (data.indexOf("cfgedit:") === 0) {
+    await handleConfigEditCallback(callback);
+    return;
+  }
+
   if (data.indexOf("cfg:") === 0) {
     await handleConfigCallback(callback);
     return;
@@ -671,6 +701,17 @@ async function handleConfigMenuCallback(callback) {
     return;
   }
 
+  if (page === "link") {
+    await answerCallbackQuery(callback.id, tForSettings(settings, "preview_ready"));
+    await editMessageText(
+      privateChatId,
+      callback.message.message_id,
+      buildGroupLinkConfigText(settings),
+      buildGroupLinkConfigKeyboard(targetChatId, settings)
+    );
+    return;
+  }
+
   const pageToRender = page === "more" ? "more" : "main";
   await answerCallbackQuery(callback.id, tForSettings(settings, "preview_ready"));
   await editMessageText(
@@ -717,8 +758,40 @@ async function handleConfigCallback(callback) {
     return;
   }
 
+  await editMessageText(
+    privateChatId,
+    callback.message.message_id,
+    buildConfigItemPreview(action, settings),
+    buildConfigItemPreviewKeyboard(targetChatId, action)
+  );
+}
+
+async function handleConfigEditCallback(callback) {
+  const parts = String(callback.data || "").split(":");
+  const targetChatId = Number(parts[1]);
+  const action = parts[2];
+  const userId = callback.from.id;
+  const privateChatId = callback.message.chat.id;
+  const settings = await ensureGroupSettings(targetChatId);
+
+  if (!(await isGroupAdmin(targetChatId, userId))) {
+    await answerCallbackQuery(callback.id, tForSettings(settings, "private_not_admin"));
+    return;
+  }
+
   await setUserState(userId, targetChatId, action, callback.message.message_id);
   await answerCallbackQuery(callback.id, tForSettings(settings, "send_new_text"));
+
+  if (action === "language") {
+    await editMessageText(
+      privateChatId,
+      callback.message.message_id,
+      buildEditPrompt(action, settings),
+      buildLanguagePickerKeyboard(targetChatId)
+    );
+    return;
+  }
+
   await editMessageText(
     privateChatId,
     callback.message.message_id,
@@ -727,13 +800,92 @@ async function handleConfigCallback(callback) {
       reply_markup: {
         inline_keyboard: [
           [
-            { text: "◀️ Volver", callback_data: `cfgmenu:main:${targetChatId}` },
+            { text: "◀️ Volver", callback_data: `cfg:${targetChatId}:${action}` },
             { text: "✅ Cerrar", callback_data: `cfgmenu:close:${targetChatId}` }
           ]
         ]
       }
     }
   );
+}
+
+async function handleLanguagePickCallback(callback) {
+  const parts = String(callback.data || "").split(":");
+  const targetChatId = Number(parts[1]);
+  const localeCode = parts[2] || "es";
+  const userId = callback.from.id;
+  const privateChatId = callback.message.chat.id;
+  const settings = await ensureGroupSettings(targetChatId);
+
+  if (!(await isGroupAdmin(targetChatId, userId))) {
+    await answerCallbackQuery(callback.id, tForSettings(settings, "private_not_admin"));
+    return;
+  }
+
+  const updated = await updateGroupSettings(targetChatId, {
+    group_language: normalizeLocale(localeCode)
+  });
+
+  await clearUserState(userId);
+  await answerCallbackQuery(callback.id, tForSettings(updated, "preview_ready"));
+  await editMessageText(
+    privateChatId,
+    callback.message.message_id,
+    `${escapeHtml(tForSettings(updated, "language_updated", { language: getLocaleLabel(updated.group_language) }))}\n\n${buildConfigMenuText(updated)}`,
+    buildConfigCategoryKeyboard(targetChatId, updated, "main")
+  );
+}
+
+async function handleGroupLinkActionCallback(callback) {
+  const parts = String(callback.data || "").split(":");
+  const targetChatId = Number(parts[1]);
+  const action = parts[2] || "";
+  const userId = callback.from.id;
+  const privateChatId = callback.message.chat.id;
+  const settings = await ensureGroupSettings(targetChatId);
+
+  if (!(await isGroupAdmin(targetChatId, userId))) {
+    await answerCallbackQuery(callback.id, tForSettings(settings, "private_not_admin"));
+    return;
+  }
+
+  if (action === "toggle") {
+    const updated = await updateGroupSettings(targetChatId, {
+      group_link_enabled: !Boolean(settings.group_link_enabled)
+    });
+
+    await answerCallbackQuery(callback.id, tForSettings(updated, "preview_ready"));
+    await editMessageText(
+      privateChatId,
+      callback.message.message_id,
+      buildGroupLinkConfigText(updated),
+      buildGroupLinkConfigKeyboard(targetChatId, updated)
+    );
+    return;
+  }
+
+  if (action === "edit") {
+    await setUserState(userId, targetChatId, "group_link_value", callback.message.message_id);
+    await answerCallbackQuery(callback.id, tForSettings(settings, "send_new_text"));
+    await editMessageText(
+      privateChatId,
+      callback.message.message_id,
+      buildConfigItemPreview("group_link_value", settings),
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: "✏️ Editar", callback_data: `cfgedit:${targetChatId}:group_link_value` },
+              { text: "◀️ Volver", callback_data: `cfgmenu:link:${targetChatId}` }
+            ],
+            [
+              { text: "✅ Cerrar", callback_data: `cfgmenu:close:${targetChatId}` }
+            ]
+          ]
+        }
+      }
+    );
+  }
 }
 
 async function handleAntispamActionCallback(callback) {
@@ -1002,6 +1154,19 @@ async function handleStaffCommand(chatId, chatTitle = "") {
   await sendMessage(chatId, lines.join("\n"));
 }
 
+async function handleGroupLinkCommand(chatId, chatTitle = "") {
+  const settings = await ensureGroupSettings(chatId, chatTitle || "");
+
+  if (!settings.group_link_enabled || !settings.group_link_value) {
+    return;
+  }
+
+  await sendMessage(
+    chatId,
+    `<b>Enlace del grupo</b>\n${escapeHtml(settings.group_link_value)}`
+  );
+}
+
 function formatAdminMention(item) {
   const user = item.user || {};
   if (!user.id) {
@@ -1105,6 +1270,64 @@ async function cleanupCommandMessage(message) {
   }
 }
 
+async function maybeHandleAntispam(chat, from, message) {
+  if (!from || !from.id || !message || !message.text) {
+    return;
+  }
+
+  if (await isGroupAdmin(chat.id, from.id)) {
+    return;
+  }
+
+  const settings = await ensureGroupSettings(chat.id, chat.title || "");
+  if (!settings.antispam_enabled) {
+    return;
+  }
+
+  const trackerKey = `${chat.id}:${from.id}`;
+  const now = Date.now();
+  const normalizedText = normalizeSpamText(message.text);
+  const previous = spamTracker.get(trackerKey) || { timestamps: [], lastText: "", sameTextCount: 0 };
+  const timestamps = [...previous.timestamps.filter((value) => now - value < 15000), now];
+  const sameTextCount = previous.lastText === normalizedText ? previous.sameTextCount + 1 : 1;
+  const state = {
+    timestamps,
+    lastText: normalizedText,
+    sameTextCount
+  };
+
+  spamTracker.set(trackerKey, state);
+
+  const repeatedBurst = sameTextCount >= 3;
+  const floodBurst = timestamps.length >= 5;
+  const linkBurst = /https?:\/\/|t\.me\/|www\./i.test(message.text) && timestamps.length >= 3;
+
+  if (!repeatedBurst && !floodBurst && !linkBurst) {
+    return;
+  }
+
+  await deleteMessage(chat.id, message.message_id).catch(() => null);
+  await sendMessage(
+    chat.id,
+    renderTemplate(settings.warning_message || "{first_name}, no se permite enviar spam en este grupo.", {
+      first_name: from.first_name || tForSettings(settings, "user_fallback"),
+      username: from.username ? `@${from.username}` : from.first_name || tForSettings(settings, "user_fallback"),
+      group: chat.title || tForSettings(settings, "group_title_fallback")
+    })
+  );
+
+  if (settings.antispam_action === "mute") {
+    const durationSeconds = parseDurationToSeconds(settings.antispam_duration_text || "24 h");
+    const untilDate = Math.floor(Date.now() / 1000) + durationSeconds;
+    await restrictChatMember(chat.id, from.id, untilDate).catch(() => null);
+    return;
+  }
+
+  if (settings.antispam_action === "kick") {
+    await banChatMember(chat.id, from.id).catch(() => null);
+  }
+}
+
 function isMemberAdminStatus(status) {
   return status === "administrator" || status === "creator";
 }
@@ -1184,7 +1407,7 @@ function buildConfigCategoryKeyboard(chatId, settings, page = "main") {
         ],
         [
           { text: "👥 Staff", callback_data: `cfgmenu:pending:${chatId}` },
-          { text: "🔗 Enlace del grupo", callback_data: `cfgmenu:pending:${chatId}` }
+          { text: "🔗 Enlace del grupo", callback_data: `cfgmenu:link:${chatId}` }
         ],
         [
           { text: "🌐 Lang", callback_data: `cfg:${chatId}:language` },
@@ -1266,6 +1489,65 @@ function buildAntispamConfigKeyboard(chatId, settings) {
           { text: "✅ Cerrar", callback_data: `cfgmenu:close:${chatId}` }
         ]
       ]
+    }
+  };
+}
+
+function buildGroupLinkConfigText(settings) {
+  return [
+    "<b>ENLACE DEL GRUPO</b>",
+    `Grupo: <b>${escapeHtml(settings.chat_title || "Grupo sincronizado")}</b>`,
+    "",
+    `Estado: <b>${settings.group_link_enabled ? "Activado" : "Desactivado"}</b>`,
+    `Enlace actual: <b>${escapeHtml(settings.group_link_value || "Sin enlace configurado")}</b>`,
+    "",
+    "Si esta activado, el comando /link enviara este enlace dentro del grupo."
+  ].join("\n");
+}
+
+function buildGroupLinkConfigKeyboard(chatId, settings) {
+  return {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          {
+            text: settings.group_link_enabled ? "🟢 Desactivar" : "🔴 Activar",
+            callback_data: `grouplink:${chatId}:toggle`
+          },
+          {
+            text: "✏️ Editar enlace",
+            callback_data: `cfgedit:${chatId}:group_link_value`
+          }
+        ],
+        [
+          { text: "◀️ Volver", callback_data: `cfgmenu:main:${chatId}` },
+          { text: "✅ Cerrar", callback_data: `cfgmenu:close:${chatId}` }
+        ]
+      ]
+    }
+  };
+}
+
+function buildLanguagePickerKeyboard(chatId) {
+  const locales = Object.entries(getSupportedLocales());
+  const rows = [];
+
+  for (let index = 0; index < locales.length; index += 2) {
+    const pair = locales.slice(index, index + 2).map(([code, label]) => ({
+      text: `${code.toUpperCase()} ${label}`,
+      callback_data: `langpick:${chatId}:${code}`
+    }));
+    rows.push(pair);
+  }
+
+  rows.push([
+    { text: "◀️ Volver", callback_data: `cfg:${chatId}:language` },
+    { text: "✅ Cerrar", callback_data: `cfgmenu:close:${chatId}` }
+  ]);
+
+  return {
+    reply_markup: {
+      inline_keyboard: rows
     }
   };
 }
@@ -1376,10 +1658,11 @@ function buildEditPrompt(action, settings) {
   const labels = {
     welcome: tForSettings(settings, "prompt_welcome"),
     warning: tForSettings(settings, "prompt_warning"),
-    rules: tForSettings(settings, "prompt_rules"),
+    rules: "Envia el nuevo reglamento del grupo.",
     raffle_intro: tForSettings(settings, "prompt_raffle_intro"),
-    language: `${tForSettings(settings, "prompt_language")}\n\n${formatLocaleOptions(getGroupLocale(settings))}`,
-    antispam_duration: "Envia la duracion del mute. Ejemplo: 1 d 24 h 17 m"
+    language: tForSettings(settings, "prompt_language"),
+    antispam_duration: "Envia la duracion del mute. Ejemplo: 1 d 24 h 17 m",
+    group_link_value: "Envia el enlace del grupo. Ejemplo: https://t.me/tu_grupo"
   };
 
   const currentValue = {
@@ -1399,6 +1682,52 @@ function buildEditPrompt(action, settings) {
     "",
     action === "language" ? "" : escapeHtml(tForSettings(settings, "placeholders"))
   ].join("\n");
+}
+
+function buildConfigItemPreview(action, settings) {
+  const labels = {
+    welcome: tForSettings(settings, "preview_welcome"),
+    warning: tForSettings(settings, "preview_warning"),
+    rules: tForSettings(settings, "preview_rules"),
+    raffle_intro: tForSettings(settings, "preview_raffle_text"),
+    language: tForSettings(settings, "preview_language"),
+    antispam_duration: "Duracion del antispam",
+    group_link_value: "Enlace del grupo"
+  };
+
+  const values = {
+    welcome: settings.welcome_message || "",
+    warning: settings.warning_message || "",
+    rules: settings.group_rules_text || "",
+    raffle_intro: settings.raffle_intro_text || "",
+    language: `${getGroupLocale(settings).toUpperCase()} - ${getLocaleLabel(getGroupLocale(settings))}`,
+    antispam_duration: settings.antispam_duration_text || "24 h",
+    group_link_value: settings.group_link_value || "Sin enlace configurado."
+  };
+
+  return [
+    `<b>${escapeHtml(labels[action] || action)}</b>`,
+    "",
+    escapeHtml(values[action] || ""),
+    "",
+    "Pulsa Editar si deseas cambiar este valor o Volver para regresar al menu."
+  ].join("\n");
+}
+
+function buildConfigItemPreviewKeyboard(chatId, action) {
+  return {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: "✏️ Editar", callback_data: `cfgedit:${chatId}:${action}` },
+          { text: "◀️ Volver", callback_data: `cfgmenu:main:${chatId}` }
+        ],
+        [
+          { text: "✅ Cerrar", callback_data: `cfgmenu:close:${chatId}` }
+        ]
+      ]
+    }
+  };
 }
 
 function buildConfigPreview(settings) {
@@ -1472,6 +1801,57 @@ function buildRaffleListUrl(chatId) {
   }
 
   return `${config.panelUrl}/raffle_live.php?chat_id=${encodeURIComponent(String(chatId))}`;
+}
+
+function normalizeSpamText(text) {
+  return String(text || "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function parseDurationToSeconds(value) {
+  const input = String(value || "").toLowerCase();
+  const parts = Array.from(input.matchAll(/(\d+)\s*([dhms])/g));
+
+  if (!parts.length) {
+    return 24 * 60 * 60;
+  }
+
+  return parts.reduce((total, item) => {
+    const amount = Number(item[1]);
+    const unit = item[2];
+
+    if (unit === "d") {
+      return total + amount * 24 * 60 * 60;
+    }
+
+    if (unit === "h") {
+      return total + amount * 60 * 60;
+    }
+
+    if (unit === "m") {
+      return total + amount * 60;
+    }
+
+    if (unit === "s") {
+      return total + amount;
+    }
+
+    return total;
+  }, 0);
+}
+
+function formatAntispamAction(action) {
+  if (action === "mute") {
+    return "Silenciar";
+  }
+
+  if (action === "kick") {
+    return "Expulsar";
+  }
+
+  return "Advertir";
 }
 
 async function editPanelMessage(chatId, messageId, text, replyMarkup) {
