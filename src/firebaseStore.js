@@ -473,6 +473,7 @@ async function createSupportTicket(mainChatId, supportChatId, user, messageText)
     first_name: user.first_name || null,
     message_text: messageText,
     support_message_id: null,
+    support_message_ids: [],
     status: "open",
     last_activity_at: nowIso(),
     created_at: nowIso(),
@@ -483,16 +484,18 @@ async function createSupportTicket(mainChatId, supportChatId, user, messageText)
   return payload;
 }
 
-async function attachSupportTicketMessage(ticketId, supportMessageId) {
+async function attachSupportTicketMessage(ticketId, supportMessageId, extraMessageIds = []) {
   const db = getFirestore();
   if (!db) {
     return null;
   }
 
   const ref = ticketsCollection().doc(String(ticketId));
+  const ids = [supportMessageId].concat(extraMessageIds).filter(Boolean);
   await ref.set(
     {
       support_message_id: supportMessageId,
+      support_message_ids: admin.firestore.FieldValue.arrayUnion(...ids),
       updated_at: nowIso()
     },
     { merge: true }
@@ -510,7 +513,7 @@ async function getSupportTicketByReply(supportChatId, supportMessageId) {
 
   const snap = await ticketsCollection()
     .where("support_chat_id", "==", supportChatId)
-    .where("support_message_id", "==", supportMessageId)
+    .where("support_message_ids", "array-contains", supportMessageId)
     .limit(1)
     .get();
 

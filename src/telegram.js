@@ -46,6 +46,15 @@ async function deleteMessage(chatId, messageId) {
   });
 }
 
+async function copyMessage(chatId, fromChatId, messageId, extra = {}) {
+  return telegramRequest("copyMessage", {
+    chat_id: chatId,
+    from_chat_id: fromChatId,
+    message_id: messageId,
+    ...extra
+  });
+}
+
 async function answerCallbackQuery(callbackQueryId, text) {
   return telegramRequest("answerCallbackQuery", {
     callback_query_id: callbackQueryId,
@@ -111,6 +120,7 @@ module.exports = {
   sendMessage,
   editMessageText,
   deleteMessage,
+  copyMessage,
   answerCallbackQuery,
   getChatMember,
   getChatAdministrators,
