@@ -568,7 +568,7 @@ async function handleHomeCallback(callback) {
       privateChatId,
       panelMessageId,
       buildSupportGroupIntroText(locale, groups),
-      buildSupportGroupIntroKeyboard()
+      buildSupportGroupIntroKeyboard(groups)
     );
     return;
   }
@@ -1626,12 +1626,19 @@ function buildSupportGroupIntroText(locale = "es", groups = []) {
   ].join("\n");
 }
 
-function buildSupportGroupIntroKeyboard() {
+function buildSupportGroupIntroKeyboard(groups = []) {
   const addUrl = config.botUsername ? `https://t.me/${config.botUsername}?startgroup=true` : config.panelUrl;
+  const groupRows = groups.map((group) => [
+    {
+      text: group.chat_title || "Grupo sin nombre",
+      callback_data: `home:support`
+    }
+  ]);
 
   return {
     reply_markup: {
       inline_keyboard: [
+        ...groupRows,
         [
           { text: "➕ Añadir al grupo", url: addUrl }
         ],
@@ -1662,6 +1669,7 @@ function buildPrivateGroupsKeyboard(groups, locale = "es") {
           { text: "Agregar grupo", url: addUrl }
         ],
         [
+          { text: "◀️ Volver", callback_data: "home:close" },
           { text: "Ayuda", callback_data: "home:help" }
         ]
       ]
