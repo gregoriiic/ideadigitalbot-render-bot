@@ -65,6 +65,10 @@ function stateDoc(userId) {
   return getFirestore().collection("userStates").doc(String(userId));
 }
 
+function profileDoc(userId) {
+  return getFirestore().collection("userProfiles").doc(String(userId));
+}
+
 function raffleDoc(chatId) {
   return groupDoc(chatId).collection("raffles").doc("active");
 }
@@ -239,6 +243,38 @@ async function clearUserState(userId) {
   }
 
   await stateDoc(userId).delete().catch(() => null);
+}
+
+async function getUserProfile(userId) {
+  const db = getFirestore();
+  if (!db) {
+    return null;
+  }
+
+  try {
+    const snap = await profileDoc(userId).get();
+    return snap.exists ? snap.data() : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+async function updateUserProfile(userId, patch) {
+  const db = getFirestore();
+  if (!db) {
+    return null;
+  }
+
+  await profileDoc(userId).set(
+    {
+      user_id: userId,
+      ...patch,
+      updated_at: nowIso()
+    },
+    { merge: true }
+  );
+
+  return getUserProfile(userId);
 }
 
 async function createRaffleRound(chatId, createdBy) {
@@ -495,6 +531,8 @@ module.exports = {
   getUserState,
   setUserState,
   clearUserState,
+  getUserProfile,
+  updateUserProfile,
   createRaffleRound,
   getActiveRaffleRound,
   getRaffleRoundById,

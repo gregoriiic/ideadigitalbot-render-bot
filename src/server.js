@@ -29,6 +29,8 @@ const {
   getUserState,
   setUserState,
   clearUserState,
+  getUserProfile,
+  updateUserProfile,
   createRaffleRound,
   getActiveRaffleRound,
   getRaffleRoundById,
@@ -501,6 +503,16 @@ async function handleCallbackQuery(callback) {
     return;
   }
 
+  if (data.indexOf("supportpick:") === 0) {
+    await handleSupportPickCallback(callback);
+    return;
+  }
+
+  if (data.indexOf("supportcfg:") === 0) {
+    await handleSupportConfigCallback(callback);
+    return;
+  }
+
   if (data.indexOf("pickgroup:") === 0) {
     await handlePickGroupCallback(callback);
     return;
@@ -563,12 +575,13 @@ async function handleHomeCallback(callback) {
 
   if (action === "support") {
     const groups = await getManageableGroups(userId);
+    const profile = await getUserProfile(userId);
     await answerCallbackQuery(callback.id, "Customer service");
     await editMessageText(
       privateChatId,
       panelMessageId,
-      buildSupportGroupIntroText(locale, groups),
-      buildSupportGroupIntroKeyboard(groups)
+      buildSupportGroupIntroText(locale, groups, profile),
+      buildSupportGroupIntroKeyboard(groups, profile)
     );
     return;
   }
@@ -674,6 +687,69 @@ async function handlePickGroupCallback(callback) {
   }
 
   await handlePrivateManageStart(privateChatId, userId, targetChatId, callback.message.message_id);
+}
+
+async function handleSupportPickCallback(callback) {
+  const targetChatId = Number(String(callback.data || "").split(":")[1]);
+  const privateChatId = callback.message.chat.id;
+  const userId = callback.from.id;
+
+  if (!Number.isFinite(targetChatId)) {
+    return;
+  }
+
+  const groups = await getManageableGroups(userId);
+  const targetGroup = groups.find((group) => Number(group.chat_id) === targetChatId);
+
+  if (!targetGroup) {
+    await answerCallbackQuery(callback.id, "Grupo no disponible");
+    return;
+  }
+
+  const profile = await updateUserProfile(userId, {
+    support_group_chat_id: targetGroup.chat_id,
+    support_group_title: targetGroup.chat_title || "Grupo sin nombre"
+  });
+
+  await answerCallbackQuery(callback.id, "Grupo customer service configurado");
+  await sendMessage(
+    targetGroup.chat_id,
+    "Grupo configurado como customer service."
+  ).catch(() => null);
+
+  await editMessageText(
+    privateChatId,
+    callback.message.message_id,
+    buildSupportGroupIntroText("es", groups, profile),
+    buildSupportGroupIntroKeyboard(groups, profile)
+  );
+}
+
+async function handleSupportConfigCallback(callback) {
+  const action = String(callback.data || "").split(":")[1] || "";
+  const privateChatId = callback.message.chat.id;
+  const userId = callback.from.id;
+  const groups = await getManageableGroups(userId);
+  const profile = await getUserProfile(userId);
+
+  if (action === "choose") {
+    await answerCallbackQuery(callback.id, "Selecciona un grupo");
+    await editMessageText(
+      privateChatId,
+      callback.message.message_id,
+      buildSupportGroupIntroText("es", groups, null),
+      buildSupportGroupIntroKeyboard(groups, null)
+    );
+    return;
+  }
+
+  await answerCallbackQuery(callback.id, "Customer service");
+  await editMessageText(
+    privateChatId,
+    callback.message.message_id,
+    buildSupportGroupIntroText("es", groups, profile),
+    buildSupportGroupIntroKeyboard(groups, profile)
+  );
 }
 
 async function handleConfigMenuCallback(callback) {
@@ -1610,7 +1686,21 @@ function buildPrivateHomeKeyboard(locale = "es") {
   };
 }
 
-function buildSupportGroupIntroText(locale = "es", groups = []) {
+function buildSupportGroupIntroText(locale = "es", groups = [], profile = null) {
+  const selectedTitle = profile && profile.support_group_title
+    ? profile.support_group_title
+    : "";
+
+  if (selectedTitle) {
+    return [
+      "<b>CUSTOMER SERVICE GROUP</b>",
+      "",
+      "Este es el grupo configurado actualmente para atender tickets y respuestas del soporte.",
+      "",
+      `<b>Grupo activo:</b> ${escapeHtml(selectedTitle)}`
+    ].join("\n");
+  }
+
   const groupLines = groups.length
     ? groups.map((group) => `- ${escapeHtml(group.chat_title || "Grupo sin nombre")}`)
     : ["- Aun no tienes grupos detectados con esta cuenta."];
@@ -1618,22 +1708,46 @@ function buildSupportGroupIntroText(locale = "es", groups = []) {
   return [
     "<b>CUSTOMER SERVICE GROUP</b>",
     "",
-    "Desde aqui puedes agregar el bot al grupo donde responderan los administradores.",
-    "Primero agrega el bot y luego nombralo administrador dentro de ese grupo.",
+    "Selecciona un unico grupo para usarlo como customer service.",
+    "Cuando quede configurado, el bot enviara ahi los tickets de soporte.",
     "",
-    "<b>Grupos detectados para tu cuenta:</b>",
+    "<b>Grupos disponibles:</b>",
     ...groupLines
   ].join("\n");
 }
 
-function buildSupportGroupIntroKeyboard(groups = []) {
+function buildSupportGroupIntroKeyboard(groups = [], profile = null) {
   const addUrl = config.botUsername ? `https://t.me/${config.botUsername}?startgroup=true` : config.panelUrl;
-  const groupRows = groups.map((group) => [
-    {
-      text: group.chat_title || "Grupo sin nombre",
-      callback_data: `home:support`
-    }
-  ]);
+  const selectedId = profile && Number.isFinite(Number(profile.support_group_chat_id))
+    ? Number(profile.support_group_chat_id)
+    : null;
+  const selectedTitle = profile && profile.support_group_title ? profile.support_group_title : "";
+
+  let groupRows = [];
+
+  if (selectedId && selectedTitle) {
+    groupRows = [
+      [
+        {
+          text: `✅ ${selectedTitle}`,
+          callback_data: "supportcfg:current"
+        }
+      ],
+      [
+        {
+          text: "Cambiar grupo",
+          callback_data: "supportcfg:choose"
+        }
+      ]
+    ];
+  } else {
+    groupRows = groups.map((group) => [
+      {
+        text: group.chat_title || "Grupo sin nombre",
+        callback_data: `supportpick:${group.chat_id}`
+      }
+    ]);
+  }
 
   return {
     reply_markup: {

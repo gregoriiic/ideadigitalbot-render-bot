@@ -351,6 +351,22 @@ async function clearUserState(userId) {
   }
 }
 
+async function getUserProfile(userId) {
+  if (useFirebase()) {
+    return firebaseStore.getUserProfile(userId);
+  }
+
+  return null;
+}
+
+async function updateUserProfile(userId, patch) {
+  if (useFirebase()) {
+    return firebaseStore.updateUserProfile(userId, patch);
+  }
+
+  return null;
+}
+
 async function createRaffleRound(chatId, createdBy) {
   if (useFirebase()) {
     return firebaseStore.createRaffleRound(chatId, createdBy);
@@ -570,6 +586,8 @@ module.exports = {
   getUserState,
   setUserState,
   clearUserState,
+  getUserProfile,
+  updateUserProfile,
   createRaffleRound,
   getActiveRaffleRound,
   getRaffleRoundById,
