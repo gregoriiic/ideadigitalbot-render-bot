@@ -36,7 +36,10 @@ const {
   getRaffleEntries,
   addRaffleEntry,
   clearRaffleEntries,
-  saveRaffleWinner
+  saveRaffleWinner,
+  createSupportTicket,
+  attachSupportTicketMessage,
+  getSupportTicketByReply
 } = require("./db");
 
 const app = express();
@@ -555,6 +558,23 @@ async function handleHomeCallback(callback) {
       `<b>${escapeHtml(tForLocale(locale, "preview_language"))}</b>\n${escapeHtml(formatLocaleOptions(locale))}`,
       buildPrivateHomeKeyboard(locale)
     );
+    return;
+  }
+
+  if (action === "support") {
+    await answerCallbackQuery(callback.id, "Customer service");
+    await editMessageText(
+      privateChatId,
+      panelMessageId,
+      buildSupportGroupIntroText(locale),
+      buildSupportGroupIntroKeyboard()
+    );
+    return;
+  }
+
+  if (action === "close") {
+    await answerCallbackQuery(callback.id, tForLocale(locale, "cancelled"));
+    await editMessageText(privateChatId, panelMessageId, "Panel cerrado.", buildPrivateHomeKeyboard(locale));
     return;
   }
 
@@ -1575,11 +1595,41 @@ function buildPrivateHomeKeyboard(locale = "es") {
           { text: "⚙️ Configuracion de grupos", callback_data: "home:groups" }
         ],
         [
+          { text: "🛟 Customer service Group", callback_data: "home:support" }
+        ],
+        [
           { text: "🧩 Panel web", url: `${config.panelUrl}/dashboard.php` },
           { text: "🌐 Languages", callback_data: "home:languages" }
         ],
         [
           { text: "ℹ️ Ayuda", callback_data: "home:help" }
+        ]
+      ]
+    }
+  };
+}
+
+function buildSupportGroupIntroText(locale = "es") {
+  return [
+    "<b>CUSTOMER SERVICE GROUP</b>",
+    "",
+    "Desde aqui puedes agregar el bot al grupo donde responderan los administradores.",
+    "Primero agrega el bot y luego nombralo administrador dentro de ese grupo."
+  ].join("\n");
+}
+
+function buildSupportGroupIntroKeyboard() {
+  const addUrl = config.botUsername ? `https://t.me/${config.botUsername}?startgroup=true` : config.panelUrl;
+
+  return {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: "➕ Añadir al grupo", url: addUrl }
+        ],
+        [
+          { text: "◀️ Volver", callback_data: "home:groups" },
+          { text: "✅ Cerrar", callback_data: "home:close" }
         ]
       ]
     }

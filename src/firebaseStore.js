@@ -73,6 +73,10 @@ function raffleEntriesCollection(chatId) {
   return raffleDoc(chatId).collection("entries");
 }
 
+function ticketsCollection() {
+  return getFirestore().collection("tickets");
+}
+
 async function listGroups() {
   const db = getFirestore();
   if (!db) {
@@ -407,6 +411,79 @@ async function saveRaffleWinner(roundId, winner) {
   return getRaffleRoundById(roundId);
 }
 
+async function createSupportTicket(mainChatId, supportChatId, user, messageText) {
+  const db = getFirestore();
+  if (!db) {
+    return null;
+  }
+
+  const counterRef = db.collection("_meta").doc("ticketCounter");
+  const ticketNumber = await db.runTransaction(async (transaction) => {
+    const snap = await transaction.get(counterRef);
+    const current = snap.exists ? Number((snap.data() || {}).value || 1000) : 1000;
+    const next = current + 1;
+    transaction.set(counterRef, { value: next, updated_at: nowIso() }, { merge: true });
+    return next;
+  });
+
+  const ticketRef = ticketsCollection().doc();
+  const payload = {
+    id: ticketRef.id,
+    ticket_number: ticketNumber,
+    main_chat_id: mainChatId,
+    support_chat_id: supportChatId,
+    user_id: user.id,
+    username: user.username || null,
+    first_name: user.first_name || null,
+    message_text: messageText,
+    support_message_id: null,
+    status: "open",
+    created_at: nowIso(),
+    updated_at: nowIso()
+  };
+
+  await ticketRef.set(payload);
+  return payload;
+}
+
+async function attachSupportTicketMessage(ticketId, supportMessageId) {
+  const db = getFirestore();
+  if (!db) {
+    return null;
+  }
+
+  const ref = ticketsCollection().doc(String(ticketId));
+  await ref.set(
+    {
+      support_message_id: supportMessageId,
+      updated_at: nowIso()
+    },
+    { merge: true }
+  );
+
+  const snap = await ref.get();
+  return snap.exists ? snap.data() : null;
+}
+
+async function getSupportTicketByReply(supportChatId, supportMessageId) {
+  const db = getFirestore();
+  if (!db) {
+    return null;
+  }
+
+  const snap = await ticketsCollection()
+    .where("support_chat_id", "==", supportChatId)
+    .where("support_message_id", "==", supportMessageId)
+    .limit(1)
+    .get();
+
+  if (snap.empty) {
+    return null;
+  }
+
+  return snap.docs[0].data();
+}
+
 module.exports = {
   hasFirebaseConfig,
   testConnection,
@@ -425,5 +502,8 @@ module.exports = {
   getRaffleEntries,
   addRaffleEntry,
   clearRaffleEntries,
-  saveRaffleWinner
+  saveRaffleWinner,
+  createSupportTicket,
+  attachSupportTicketMessage,
+  getSupportTicketByReply
 };

@@ -535,6 +535,30 @@ async function saveRaffleWinner(roundId, winner) {
   return getRaffleRoundById(roundId);
 }
 
+async function createSupportTicket(mainChatId, supportChatId, user, messageText) {
+  if (useFirebase()) {
+    return firebaseStore.createSupportTicket(mainChatId, supportChatId, user, messageText);
+  }
+
+  return null;
+}
+
+async function attachSupportTicketMessage(ticketId, supportMessageId) {
+  if (useFirebase()) {
+    return firebaseStore.attachSupportTicketMessage(ticketId, supportMessageId);
+  }
+
+  return null;
+}
+
+async function getSupportTicketByReply(supportChatId, supportMessageId) {
+  if (useFirebase()) {
+    return firebaseStore.getSupportTicketByReply(supportChatId, supportMessageId);
+  }
+
+  return null;
+}
+
 module.exports = {
   getPool,
   testDbConnection,
@@ -553,5 +577,8 @@ module.exports = {
   getRaffleEntries,
   addRaffleEntry,
   clearRaffleEntries,
-  saveRaffleWinner
+  saveRaffleWinner,
+  createSupportTicket,
+  attachSupportTicketMessage,
+  getSupportTicketByReply
 };

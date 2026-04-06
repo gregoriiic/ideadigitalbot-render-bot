@@ -526,6 +526,8 @@ function getDefaultGroupSettings(locale = "es") {
     antispam_duration_text: "24 h",
     group_link_enabled: false,
     group_link_value: "",
+    support_group_chat_id: null,
+    support_group_title: "",
     topics_policy: "Permitido",
     banned_words_text: "",
     repeated_messages_policy: "Eliminar mensajes repetidos despues de 3 repeticiones.",
