@@ -2,6 +2,13 @@ const express = require("express");
 const crypto = require("crypto");
 const config = require("./config");
 const {
+  getSupportedLocales,
+  getLocaleLabel,
+  getDefaultGroupSettings,
+  normalizeLocale,
+  translate
+} = require("./i18n");
+const {
   sendMessage,
   editMessageText,
   deleteMessage,
@@ -36,7 +43,8 @@ const ACTION_TO_FIELD = {
   welcome: "welcome_message",
   warning: "warning_message",
   rules: "raffle_rules_text",
-  raffle_intro: "raffle_intro_text"
+  raffle_intro: "raffle_intro_text",
+  language: "group_language"
 };
 
 app.get("/", async (_req, res) => {
@@ -104,6 +112,68 @@ app.options("/api/public/group/:chatId/raffle", (req, res) => {
   return res.status(204).end();
 });
 
+app.get("/api/panel/group/:chatId/settings", async (req, res) => {
+  if (!isPanelTokenValid(req)) {
+    return res.status(403).json({ ok: false, message: "Invalid panel token." });
+  }
+
+  try {
+    const chatId = Number(req.params.chatId);
+    if (!Number.isFinite(chatId)) {
+      return res.status(400).json({ ok: false, message: "Invalid chat id." });
+    }
+
+    const settings = await ensureGroupSettings(chatId);
+    return res.json({ ok: true, settings });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ ok: false, message: error.message });
+  }
+});
+
+app.post("/api/panel/group/:chatId/settings", async (req, res) => {
+  if (!isPanelTokenValid(req)) {
+    return res.status(403).json({ ok: false, message: "Invalid panel token." });
+  }
+
+  try {
+    const chatId = Number(req.params.chatId);
+    if (!Number.isFinite(chatId)) {
+      return res.status(400).json({ ok: false, message: "Invalid chat id." });
+    }
+
+    const current = await ensureGroupSettings(chatId);
+    const body = req.body || {};
+    const patch = {};
+
+    if (typeof body.group_language === "string") {
+      patch.group_language = normalizeLocale(body.group_language);
+    }
+
+    if (typeof body.welcome_message === "string") {
+      patch.welcome_message = body.welcome_message.trim();
+    }
+
+    if (typeof body.warning_message === "string") {
+      patch.warning_message = body.warning_message.trim();
+    }
+
+    if (typeof body.raffle_rules_text === "string") {
+      patch.raffle_rules_text = body.raffle_rules_text.trim();
+    }
+
+    if (typeof body.raffle_intro_text === "string") {
+      patch.raffle_intro_text = body.raffle_intro_text.trim();
+    }
+
+    const settings = await updateGroupSettings(chatId, patch);
+    return res.json({ ok: true, previous: current, settings });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ ok: false, message: error.message });
+  }
+});
+
 app.get("/telegram/set-webhook", async (_req, res) => {
   const webhookUrl = `${config.appUrl}/telegram/webhook`;
   const result = await setWebhook(webhookUrl);
@@ -153,6 +223,21 @@ function isSecretValid(req) {
   return crypto.timingSafeEqual(Buffer.from(incoming), Buffer.from(expected));
 }
 
+function isPanelTokenValid(req) {
+  if (!config.panelApiToken) {
+    return false;
+  }
+
+  const incoming = req.get("X-Panel-Token") || "";
+  const expected = config.panelApiToken;
+
+  if (incoming.length !== expected.length) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(Buffer.from(incoming), Buffer.from(expected));
+}
+
 async function handleMessage(message) {
   const chat = message.chat || {};
   const from = message.from || {};
@@ -179,7 +264,8 @@ async function handleMessage(message) {
   const command = extractCommand(text);
 
   if (command === "/help") {
-    await sendMessage(chat.id, buildGroupHelpText());
+    const settings = await ensureGroupSettings(chat.id, chat.title || "");
+    await sendMessage(chat.id, buildGroupHelpText(settings));
     await cleanupCommandMessage(message);
     return;
   }
@@ -192,13 +278,13 @@ async function handleMessage(message) {
 
   if (command === "/reglas") {
     const settings = await ensureGroupSettings(chat.id, chat.title || "");
-    await sendMessage(chat.id, settings.raffle_rules_text || "No rules configured yet.");
+    await sendMessage(chat.id, settings.raffle_rules_text || tForSettings(settings, "rules_empty"));
     await cleanupCommandMessage(message);
     return;
   }
 
   if (command === "/staff") {
-    await handleStaffCommand(chat.id);
+    await handleStaffCommand(chat.id, chat.title || "");
     await cleanupCommandMessage(message);
     return;
   }
@@ -214,19 +300,19 @@ async function handleMessage(message) {
   }
 
   if (command === "/sortear") {
-    await handleDrawWinner(chat.id);
+    await handleDrawWinner(chat.id, chat.title || "");
     await cleanupCommandMessage(message);
     return;
   }
 
   if (command === "/reset") {
-    await handleResetRaffle(chat.id);
+    await handleResetRaffle(chat.id, chat.title || "");
     await cleanupCommandMessage(message);
     return;
   }
 
   if (command === "/warn") {
-    await handleWarnCommand(chat.id, message);
+    await handleWarnCommand(chat.id, chat.title || "", message);
     await cleanupCommandMessage(message);
   }
 }
@@ -245,12 +331,12 @@ async function handlePrivateText(message, text) {
       return;
     }
 
-    await sendMessage(chatId, buildPrivateWelcomeText());
+    await sendMessage(chatId, buildPrivateWelcomeText("es"));
     return;
   }
 
   if (command === "/help") {
-    await sendMessage(chatId, buildPrivateHelpText());
+    await sendMessage(chatId, buildPrivateHelpText("es"));
     return;
   }
 
@@ -270,19 +356,27 @@ async function handlePrivateText(message, text) {
 
   if (!(await isGroupAdmin(targetChatId, from.id))) {
     await clearUserState(from.id);
-    await sendMessage(chatId, "You are no longer an administrator in that group.");
+    const fallbackSettings = await ensureGroupSettings(targetChatId);
+    await sendMessage(chatId, tForSettings(fallbackSettings, "private_no_longer_admin"));
     return;
   }
 
-  const updated = await updateGroupSettings(targetChatId, {
-    [field]: text
-  });
+  let updated;
+  if (actionKey === "language") {
+    updated = await updateGroupSettings(targetChatId, {
+      group_language: normalizeLocale(text)
+    });
+  } else {
+    updated = await updateGroupSettings(targetChatId, {
+      [field]: text
+    });
+  }
 
   await clearUserState(from.id);
   await sendMessage(
     chatId,
-    `Saved successfully for group <b>${escapeHtml(updated.chat_title || String(targetChatId))}</b>.\n\n${buildSettingPreview(actionKey, updated[field])}`,
-    buildManageKeyboard(targetChatId)
+    `${escapeHtml(tForSettings(updated, "private_saved", { group: updated.chat_title || String(targetChatId) }))}\n\n${buildSettingPreview(actionKey, actionKey === "language" ? getLocaleLabel(updated.group_language) : updated[field], updated)}`,
+    buildManageKeyboard(targetChatId, updated)
   );
 }
 
@@ -290,16 +384,16 @@ async function handlePrivateManageStart(privateChatId, userId, targetChatId) {
   const member = await getChatMember(targetChatId, userId);
 
   if (!member.ok || !isMemberAdminStatus(member.result.status)) {
-    await sendMessage(privateChatId, "You must be an admin of that group to edit its settings.");
+    await sendMessage(privateChatId, tForLocale("es", "private_not_admin"));
     return;
   }
 
   const title = member.result.chat ? member.result.chat.title : "";
-  await ensureGroupSettings(targetChatId, title);
+  const settings = await ensureGroupSettings(targetChatId, title);
   await sendMessage(
     privateChatId,
-    `You are now managing <b>${escapeHtml(title || String(targetChatId))}</b>.\nChoose what you want to edit:`,
-    buildManageKeyboard(targetChatId)
+    `<b>${escapeHtml(tForSettings(settings, "private_manage_title", { group: title || String(targetChatId) }))}</b>\n${escapeHtml(tForSettings(settings, "private_manage_subtitle"))}`,
+    buildManageKeyboard(targetChatId, settings)
   );
 }
 
@@ -323,39 +417,38 @@ async function handleConfigCallback(callback) {
   const action = parts[2];
   const userId = callback.from.id;
   const privateChatId = callback.message.chat.id;
+  const settings = await ensureGroupSettings(targetChatId);
 
   if (!(await isGroupAdmin(targetChatId, userId))) {
-    await answerCallbackQuery(callback.id, "You are not an admin in that group.");
+    await answerCallbackQuery(callback.id, tForSettings(settings, "private_not_admin"));
     return;
   }
 
-  const settings = await ensureGroupSettings(targetChatId);
-
   if (action === "preview") {
-    await answerCallbackQuery(callback.id, "Preview ready");
+    await answerCallbackQuery(callback.id, tForSettings(settings, "preview_ready"));
     await sendMessage(
       privateChatId,
       buildConfigPreview(settings),
-      buildManageKeyboard(targetChatId)
+      buildManageKeyboard(targetChatId, settings)
     );
     return;
   }
 
   if (action === "cancel") {
     await clearUserState(userId);
-    await answerCallbackQuery(callback.id, "Cancelled");
-    await sendMessage(privateChatId, "Edition cancelled.", buildManageKeyboard(targetChatId));
+    await answerCallbackQuery(callback.id, tForSettings(settings, "cancelled"));
+    await sendMessage(privateChatId, tForSettings(settings, "edition_cancelled"), buildManageKeyboard(targetChatId, settings));
     return;
   }
 
   await setUserState(userId, targetChatId, action);
-  await answerCallbackQuery(callback.id, "Send the new text now.");
+  await answerCallbackQuery(callback.id, tForSettings(settings, "send_new_text"));
   await sendMessage(privateChatId, buildEditPrompt(action, settings));
 }
 
 async function handleRaffleJoin(callback) {
   if (!(await isDatabaseAvailable())) {
-    await answerCallbackQuery(callback.id, "Database is unavailable right now.");
+    await answerCallbackQuery(callback.id, tForLocale("es", "database_unavailable"));
     return;
   }
 
@@ -369,7 +462,10 @@ async function handleRaffleJoin(callback) {
   }
 
   if (!round || round.status !== "active") {
-    await answerCallbackQuery(callback.id, "This raffle is not active anymore.");
+    const localeSettings = callback.message && callback.message.chat
+      ? await ensureGroupSettings(callback.message.chat.id)
+      : { group_language: "es" };
+    await answerCallbackQuery(callback.id, tForSettings(localeSettings, "raffle_inactive"));
     return;
   }
 
@@ -378,18 +474,18 @@ async function handleRaffleJoin(callback) {
   const entries = await getRaffleEntries(roundId);
   const settings = await ensureGroupSettings(round.chat_id);
   const messageText = buildRaffleMessage(round.chat_id, settings, entries);
-  const replyMarkup = buildRaffleKeyboard(roundId, entries.length);
+  const replyMarkup = buildRaffleKeyboard(roundId, entries.length, settings);
 
   if (round.message_id) {
     await editMessageText(round.chat_id, round.message_id, messageText, replyMarkup);
   }
 
   if (entryResult.duplicate) {
-    await answerCallbackQuery(callback.id, "You are already on the raffle list.");
+    await answerCallbackQuery(callback.id, tForSettings(settings, "duplicate_entry"));
     return;
   }
 
-  await answerCallbackQuery(callback.id, `You are in. Total: ${entries.length}`);
+  await answerCallbackQuery(callback.id, tForSettings(settings, "join_success", { count: entries.length }));
 }
 
 async function handlePanelBotCommand(chat, from) {
@@ -397,10 +493,12 @@ async function handlePanelBotCommand(chat, from) {
     return;
   }
 
+  const settings = await ensureGroupSettings(chat.id, chat.title || "");
+
   if (!config.botUsername) {
     await sendMessage(
       chat.id,
-      "BOT_USERNAME is not configured in Render yet, so the private setup link cannot be generated."
+      tForSettings(settings, "panelbot_missing_username")
     );
     return;
   }
@@ -408,11 +506,11 @@ async function handlePanelBotCommand(chat, from) {
   const manageUrl = `https://t.me/${config.botUsername}?start=manage_${chat.id}`;
   await sendMessage(
     chat.id,
-    "Open the private admin panel of the bot from this button:",
+    tForSettings(settings, "panelbot_open_text"),
     {
       reply_markup: {
         inline_keyboard: [
-          [{ text: "Open bot admin", url: manageUrl }]
+          [{ text: tForSettings(settings, "panelbot_open_button"), url: manageUrl }]
         ]
       }
     }
@@ -421,7 +519,7 @@ async function handlePanelBotCommand(chat, from) {
 
 async function handleNewRaffle(chat, from) {
   if (!(await isDatabaseAvailable())) {
-    await sendMessage(chat.id, "The raffle database is unavailable right now.");
+    await sendMessage(chat.id, tForLocale("es", "raffle_db_unavailable"));
     return;
   }
 
@@ -431,7 +529,7 @@ async function handleNewRaffle(chat, from) {
   const response = await sendMessage(
     chat.id,
     buildRaffleMessage(chat.id, settings, entries),
-    buildRaffleKeyboard(round.id, entries.length)
+    buildRaffleKeyboard(round.id, entries.length, settings)
   );
 
   if (response.ok && response.result && response.result.message_id) {
@@ -439,22 +537,23 @@ async function handleNewRaffle(chat, from) {
   }
 }
 
-async function handleDrawWinner(chatId) {
+async function handleDrawWinner(chatId, chatTitle = "") {
   if (!(await isDatabaseAvailable())) {
-    await sendMessage(chatId, "The raffle database is unavailable right now.");
+    await sendMessage(chatId, tForLocale("es", "raffle_db_unavailable"));
     return;
   }
 
+  const settings = await ensureGroupSettings(chatId, chatTitle || "");
   const round = await getActiveRaffleRound(chatId);
 
   if (!round) {
-    await sendMessage(chatId, "There is no active raffle. Use /NSorteo first.");
+    await sendMessage(chatId, tForSettings(settings, "no_active_raffle"));
     return;
   }
 
   const entries = await getRaffleEntries(round.id);
   if (!entries.length) {
-    await sendMessage(chatId, "There are no registered users yet.");
+    await sendMessage(chatId, tForSettings(settings, "no_raffle_entries"));
     return;
   }
 
@@ -469,25 +568,25 @@ async function handleDrawWinner(chatId) {
 
   await sendMessage(
     chatId,
-    `Se han sorteado (${participantCount}) Usuarios.\n\nEl ganador es:\n<b>${mention}</b>`
+    tForSettings(settings, "winner_message", { count: participantCount, winner: `<b>${mention}</b>` })
   );
 }
 
-async function handleResetRaffle(chatId) {
+async function handleResetRaffle(chatId, chatTitle = "") {
   if (!(await isDatabaseAvailable())) {
-    await sendMessage(chatId, "The raffle database is unavailable right now.");
+    await sendMessage(chatId, tForLocale("es", "raffle_db_unavailable"));
     return;
   }
 
+  const settings = await ensureGroupSettings(chatId, chatTitle || "");
   const round = await getActiveRaffleRound(chatId);
 
   if (!round) {
-    await sendMessage(chatId, "There is no active raffle to reset.");
+    await sendMessage(chatId, tForSettings(settings, "no_raffle_to_reset"));
     return;
   }
 
   await clearRaffleEntries(round.id);
-  const settings = await ensureGroupSettings(chatId);
   const entries = await getRaffleEntries(round.id);
 
   if (round.message_id) {
@@ -495,47 +594,49 @@ async function handleResetRaffle(chatId) {
       chatId,
       round.message_id,
       buildRaffleMessage(chatId, settings, entries),
-      buildRaffleKeyboard(round.id, 0)
+      buildRaffleKeyboard(round.id, 0, settings)
     );
   }
 
-  await sendMessage(chatId, "The raffle list was reset. Users can register again.");
+  await sendMessage(chatId, tForSettings(settings, "raffle_reset_done"));
 }
 
-async function handleWarnCommand(chatId, message) {
+async function handleWarnCommand(chatId, chatTitle = "", message) {
   if (!(await isDatabaseAvailable())) {
-    await sendMessage(chatId, "The configuration database is unavailable right now.");
+    await sendMessage(chatId, tForLocale("es", "database_unavailable"));
     return;
   }
+
+  const settings = await ensureGroupSettings(chatId, chatTitle || "");
 
   if (!message.reply_to_message || !message.reply_to_message.from) {
-    await sendMessage(chatId, "Reply to a user message to send a warning.");
+    await sendMessage(chatId, tForSettings(settings, "warn_reply_required"));
     return;
   }
 
-  const settings = await ensureGroupSettings(chatId);
   const target = message.reply_to_message.from;
   const rendered = renderTemplate(settings.warning_message, {
-    first_name: target.first_name || "user",
-    username: target.username ? `@${target.username}` : target.first_name || "user",
-    group: message.chat.title || "group"
+    first_name: target.first_name || tForSettings(settings, "user_fallback"),
+    username: target.username ? `@${target.username}` : target.first_name || tForSettings(settings, "user_fallback"),
+    group: message.chat.title || tForSettings(settings, "group_title_fallback")
   });
 
   await sendMessage(chatId, rendered);
 }
 
-async function handleStaffCommand(chatId) {
+async function handleStaffCommand(chatId, chatTitle = "") {
+  const settings = await ensureGroupSettings(chatId, chatTitle || "");
   const admins = await getChatAdministrators(chatId);
   if (!admins.ok || !Array.isArray(admins.result)) {
-    await sendMessage(chatId, "I could not read the staff list right now.");
+    await sendMessage(chatId, tForSettings(settings, "staff_unavailable"));
     return;
   }
 
-  const lines = ["<b>Group staff</b>"];
+  const lines = [`<b>${escapeHtml(tForSettings(settings, "group_staff_title"))}</b>`];
 
   admins.result.forEach((item) => {
     const user = item.user || {};
-    const title = classifyAdmin(item);
+    const title = classifyAdmin(item, settings);
     const name = user.username ? `@${user.username}` : [user.first_name, user.last_name].filter(Boolean).join(" ");
     lines.push(`• <b>${escapeHtml(title)}</b>: ${escapeHtml(name || String(user.id || ""))}`);
   });
@@ -549,14 +650,14 @@ async function handleWelcomeMessage(chat, newMembers) {
   }
 
   const settings = await ensureGroupSettings(chat.id, chat.title || "");
-  const template = settings.welcome_message || "Bienvenido {first_name} a {group}.";
+  const template = settings.welcome_message || getDefaultGroupSettings(getGroupLocale(settings)).welcome_message;
 
   for (const user of newMembers) {
     const text = renderTemplate(template, {
-      first_name: user.first_name || "user",
+      first_name: user.first_name || tForSettings(settings, "user_fallback"),
       full_name: [user.first_name, user.last_name].filter(Boolean).join(" "),
-      username: user.username ? `@${user.username}` : user.first_name || "user",
-      group: chat.title || "group"
+      username: user.username ? `@${user.username}` : user.first_name || tForSettings(settings, "user_fallback"),
+      group: chat.title || tForSettings(settings, "group_title_fallback")
     });
 
     await sendMessage(chat.id, text);
@@ -587,84 +688,76 @@ function isMemberAdminStatus(status) {
   return status === "administrator" || status === "creator";
 }
 
-function buildManageKeyboard(chatId) {
+function buildManageKeyboard(chatId, settings = { group_language: "es" }) {
   return {
     reply_markup: {
       inline_keyboard: [
         [
-          { text: "Edit welcome", callback_data: `cfg:${chatId}:welcome` },
-          { text: "Edit warning", callback_data: `cfg:${chatId}:warning` }
+          { text: tForSettings(settings, "edit_welcome"), callback_data: `cfg:${chatId}:welcome` },
+          { text: tForSettings(settings, "edit_warning"), callback_data: `cfg:${chatId}:warning` }
         ],
         [
-          { text: "Edit rules", callback_data: `cfg:${chatId}:rules` },
-          { text: "Edit raffle text", callback_data: `cfg:${chatId}:raffle_intro` }
+          { text: tForSettings(settings, "edit_rules"), callback_data: `cfg:${chatId}:rules` },
+          { text: tForSettings(settings, "edit_raffle_text"), callback_data: `cfg:${chatId}:raffle_intro` }
         ],
         [
-          { text: "Preview", callback_data: `cfg:${chatId}:preview` },
-          { text: "Cancel", callback_data: `cfg:${chatId}:cancel` }
+          { text: tForSettings(settings, "edit_language"), callback_data: `cfg:${chatId}:language` },
+          { text: tForSettings(settings, "preview_button"), callback_data: `cfg:${chatId}:preview` }
+        ],
+        [
+          { text: tForSettings(settings, "cancel_button"), callback_data: `cfg:${chatId}:cancel` }
         ]
       ]
     }
   };
 }
 
-function buildPrivateWelcomeText() {
+function buildPrivateWelcomeText(locale = "es") {
   return [
-    "<b>Ideadigital Bot</b>",
+    `<b>${escapeHtml(tForLocale(locale, "private_welcome_title"))}</b>`,
     "",
-    "This private chat is your bot control center.",
-    "Use /panel inside a group or /panelbot in a group where you are admin to receive the private management button."
+    escapeHtml(tForLocale(locale, "private_welcome_body"))
   ].join("\n");
 }
 
-function buildPrivateHelpText() {
+function buildPrivateHelpText(locale = "es") {
   return [
-    "<b>Private help</b>",
+    `<b>${escapeHtml(tForLocale(locale, "private_help_title"))}</b>`,
     "",
-    "Use the private management menu to edit:",
-    "• Welcome message",
-    "• Warning message",
-    "• Raffle rules",
-    "• Main raffle message"
+    escapeHtml(tForLocale(locale, "private_help_body"))
   ].join("\n");
 }
 
-function buildGroupHelpText() {
+function buildGroupHelpText(settings = { group_language: "es" }) {
   return [
-    "<b>Main commands</b>",
-    "/NSorteo - Start a raffle with a live register button",
-    "/Sortear - Pick a random winner",
-    "/Reset - Clear all current raffle entries",
-    "/Reglas - Show the raffle rules",
-    "/Staff - Show founders, admins, and moderators",
-    "/Warn - Reply to a user and send a warning",
-    "/PanelBot - Open the private configuration flow"
+    `<b>${escapeHtml(tForSettings(settings, "group_help_title"))}</b>`,
+    escapeHtml(tForSettings(settings, "group_help_body"))
   ].join("\n");
 }
 
 function buildRaffleMessage(chatId, settings, entries) {
-  const intro = settings.raffle_intro_text || "Participa en nuestro sorteo presionando el botón.";
+  const intro = settings.raffle_intro_text || getDefaultGroupSettings(getGroupLocale(settings)).raffle_intro_text;
   const listUrl = buildRaffleListUrl(chatId);
   const listLine = listUrl
-    ? `<a href="${escapeHtml(listUrl)}">Ver lista...</a>`
-    : "Ver lista...";
+    ? `<a href="${escapeHtml(listUrl)}">${escapeHtml(tForSettings(settings, "raffle_view_list"))}</a>`
+    : escapeHtml(tForSettings(settings, "raffle_view_list"));
 
   return [
-    "<b>Sorteo activo</b>",
+    `<b>${escapeHtml(tForSettings(settings, "raffle_active_title"))}</b>`,
     escapeHtml(intro),
     "",
-    `<b>Anotados (${entries.length})</b>`,
+    `<b>${escapeHtml(tForSettings(settings, "raffle_registered_label", { count: entries.length }))}</b>`,
     listLine,
     "",
-    "Usa /Reglas para ver las condiciones."
+    escapeHtml(tForSettings(settings, "raffle_rules_hint"))
   ].join("\n");
 }
 
-function buildRaffleKeyboard(roundId, count) {
+function buildRaffleKeyboard(roundId, count, settings = { group_language: "es" }) {
   return {
     reply_markup: {
       inline_keyboard: [
-        [{ text: `Anotar ✅ ${String(count).padStart(2, "0")}`, callback_data: `raffle_join:${roundId}` }]
+        [{ text: tForSettings(settings, "join_button", { count: String(count).padStart(2, "0") }), callback_data: `raffle_join:${roundId}` }]
       ]
     }
   };
@@ -672,45 +765,76 @@ function buildRaffleKeyboard(roundId, count) {
 
 function buildEditPrompt(action, settings) {
   const labels = {
-    welcome: "Send the new welcome message.",
-    warning: "Send the new warning message.",
-    rules: "Send the new raffle rules.",
-    raffle_intro: "Send the new text that appears above the raffle button."
+    welcome: tForSettings(settings, "prompt_welcome"),
+    warning: tForSettings(settings, "prompt_warning"),
+    rules: tForSettings(settings, "prompt_rules"),
+    raffle_intro: tForSettings(settings, "prompt_raffle_intro"),
+    language: `${tForSettings(settings, "prompt_language")}\n\n${formatLocaleOptions(getGroupLocale(settings))}`
   };
 
   const currentValue = {
     welcome: settings.welcome_message,
     warning: settings.warning_message,
     rules: settings.raffle_rules_text,
-    raffle_intro: settings.raffle_intro_text
+    raffle_intro: settings.raffle_intro_text,
+    language: `${getGroupLocale(settings).toUpperCase()} - ${getLocaleLabel(getGroupLocale(settings))}`
   };
 
   return [
     labels[action] || "Send the new content.",
     "",
-    "<b>Current value:</b>",
+    `<b>${escapeHtml(tForSettings(settings, "current_value"))}</b>`,
     escapeHtml(currentValue[action] || "(empty)"),
     "",
-    "Available placeholders: {first_name}, {full_name}, {username}, {group}"
+    action === "language" ? "" : escapeHtml(tForSettings(settings, "placeholders"))
   ].join("\n");
 }
 
 function buildConfigPreview(settings) {
   return [
-    `<b>Group:</b> ${escapeHtml(settings.chat_title || String(settings.chat_id))}`,
+    `<b>${escapeHtml(tForSettings(settings, "preview_group"))}:</b> ${escapeHtml(settings.chat_title || String(settings.chat_id))}`,
     "",
-    `<b>Welcome:</b>\n${escapeHtml(settings.welcome_message || "")}`,
+    `<b>${escapeHtml(tForSettings(settings, "preview_welcome"))}:</b>\n${escapeHtml(settings.welcome_message || "")}`,
     "",
-    `<b>Warning:</b>\n${escapeHtml(settings.warning_message || "")}`,
+    `<b>${escapeHtml(tForSettings(settings, "preview_warning"))}:</b>\n${escapeHtml(settings.warning_message || "")}`,
     "",
-    `<b>Rules:</b>\n${escapeHtml(settings.raffle_rules_text || "")}`,
+    `<b>${escapeHtml(tForSettings(settings, "preview_rules"))}:</b>\n${escapeHtml(settings.raffle_rules_text || "")}`,
     "",
-    `<b>Raffle text:</b>\n${escapeHtml(settings.raffle_intro_text || "")}`
+    `<b>${escapeHtml(tForSettings(settings, "preview_raffle_text"))}:</b>\n${escapeHtml(settings.raffle_intro_text || "")}`,
+    "",
+    `<b>${escapeHtml(tForSettings(settings, "preview_language"))}:</b>\n${escapeHtml(getLocaleLabel(getGroupLocale(settings)))}`
   ].join("\n");
 }
 
-function buildSettingPreview(action, value) {
-  return `<b>${escapeHtml(action)}</b>\n${escapeHtml(value || "")}`;
+function buildSettingPreview(action, value, settings = { group_language: "es" }) {
+  const labels = {
+    welcome: tForSettings(settings, "preview_welcome"),
+    warning: tForSettings(settings, "preview_warning"),
+    rules: tForSettings(settings, "preview_rules"),
+    raffle_intro: tForSettings(settings, "preview_raffle_text"),
+    language: tForSettings(settings, "preview_language")
+  };
+
+  return `<b>${escapeHtml(labels[action] || action)}</b>\n${escapeHtml(value || "")}`;
+}
+
+function getGroupLocale(settings) {
+  return normalizeLocale(settings && settings.group_language ? settings.group_language : "es");
+}
+
+function tForLocale(locale, key, vars = {}) {
+  return translate(normalizeLocale(locale), key, vars);
+}
+
+function tForSettings(settings, key, vars = {}) {
+  return tForLocale(getGroupLocale(settings), key, vars);
+}
+
+function formatLocaleOptions(locale) {
+  const current = normalizeLocale(locale);
+  return Object.entries(getSupportedLocales())
+    .map(([code, label]) => `${code === current ? "•" : "◦"} ${code.toUpperCase()} - ${label}`)
+    .join("\n");
 }
 
 function renderTemplate(template, values) {
@@ -727,19 +851,19 @@ function extractCommand(text) {
   return base.toLowerCase();
 }
 
-function classifyAdmin(item) {
+function classifyAdmin(item, settings = { group_language: "es" }) {
   const status = item.status;
   const customTitle = item.custom_title;
 
   if (status === "creator") {
-    return "Founder";
+    return tForSettings(settings, "founder");
   }
 
   if (customTitle) {
     return customTitle;
   }
 
-  return "Administrator";
+  return tForSettings(settings, "administrator");
 }
 
 function formatEntryName(entry) {

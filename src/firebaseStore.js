@@ -1,18 +1,8 @@
 const admin = require("firebase-admin");
 const config = require("./config");
+const { getDefaultGroupSettings, normalizeLocale } = require("./i18n");
 
 let firestore = null;
-
-const FALLBACK_GROUP_SETTINGS = {
-  chat_id: 0,
-  chat_title: "",
-  welcome_message: "Bienvenido {first_name} a {group}.",
-  warning_message: "{first_name}, esta es una advertencia oficial del grupo.",
-  raffle_rules_text:
-    "Reglas del sorteo:\n1. Una participación por usuario.\n2. Respeta las decisiones de la administración.",
-  raffle_intro_text: "Participa en nuestro sorteo presionando el botón de abajo.",
-  updated_at: null
-};
 
 function nowIso() {
   return new Date().toISOString();
@@ -100,44 +90,52 @@ function parseRoundId(roundId) {
     return null;
   }
 
-  return {
-    chatId,
-    raffleKey
-  };
+  return { chatId, raffleKey };
 }
 
 async function getGroupSettings(chatId) {
   const db = getFirestore();
   if (!db) {
-    return { ...FALLBACK_GROUP_SETTINGS, chat_id: chatId };
+    return { ...getDefaultGroupSettings("es"), chat_id: chatId };
   }
 
   try {
     const snap = await groupDoc(chatId).get();
     if (!snap.exists) {
-      return { ...FALLBACK_GROUP_SETTINGS, chat_id: chatId };
+      return { ...getDefaultGroupSettings("es"), chat_id: chatId };
     }
 
-    return { ...FALLBACK_GROUP_SETTINGS, ...snap.data(), chat_id: chatId };
+    const stored = snap.data() || {};
+    const locale = normalizeLocale(stored.group_language || "es");
+    return {
+      ...getDefaultGroupSettings(locale),
+      ...stored,
+      group_language: locale,
+      chat_id: chatId
+    };
   } catch (_error) {
-    return { ...FALLBACK_GROUP_SETTINGS, chat_id: chatId };
+    return { ...getDefaultGroupSettings("es"), chat_id: chatId };
   }
 }
 
 async function ensureGroupSettings(chatId, chatTitle = "") {
   const db = getFirestore();
   if (!db) {
-    return { ...FALLBACK_GROUP_SETTINGS, chat_id: chatId, chat_title: chatTitle };
+    return { ...getDefaultGroupSettings("es"), chat_id: chatId, chat_title: chatTitle };
   }
 
   const existing = await getGroupSettings(chatId);
+  const locale = normalizeLocale(existing.group_language || "es");
+  const defaults = getDefaultGroupSettings(locale);
   const resolvedTitle = chatTitle || existing.chat_title || "";
 
   await groupDoc(chatId).set(
     {
-      ...FALLBACK_GROUP_SETTINGS,
+      ...defaults,
+      ...existing,
       chat_id: chatId,
       chat_title: resolvedTitle,
+      group_language: locale,
       updated_at: nowIso()
     },
     { merge: true }
@@ -152,9 +150,15 @@ async function updateGroupSettings(chatId, patch) {
     return { ...(await getGroupSettings(chatId)), ...patch };
   }
 
+  const existing = await getGroupSettings(chatId);
+  const nextLocale = patch.group_language
+    ? normalizeLocale(patch.group_language)
+    : normalizeLocale(existing.group_language || "es");
+
   await groupDoc(chatId).set(
     {
       ...patch,
+      group_language: nextLocale,
       updated_at: nowIso()
     },
     { merge: true }
