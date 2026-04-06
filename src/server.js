@@ -291,12 +291,25 @@ app.post("/api/panel/bots/register", async (req, res) => {
       return res.status(400).json({ ok: false, message: "Missing bot data." });
     }
 
-    const webhookUrl = `${config.appUrl}/telegram/webhook/${bot.webhook_key}`;
-    const telegram = await setWebhook(webhookUrl, bot.bot_token);
+      const webhookUrl = `${config.appUrl}/telegram/webhook/${bot.webhook_key}`;
+      const telegram = await setWebhook(webhookUrl, bot.bot_token);
 
-    return res.json({
-      ok: true,
-      bot: {
+      if (owner.owner_telegram_id) {
+        await sendMessage(
+          owner.owner_telegram_id,
+          [
+            "<b>Bot conectado correctamente</b>",
+            "",
+            "Bienvenido. Tu bot ya esta listo para configurarse y empezar a funcionar."
+          ].join("\n"),
+          {},
+          bot.bot_token
+        ).catch(() => null);
+      }
+
+      return res.json({
+        ok: true,
+        bot: {
         id: bot.id,
         bot_name: bot.bot_name,
         bot_username: bot.bot_username,
