@@ -129,6 +129,31 @@ async function ensureSchema() {
   }
 }
 
+async function listGroups() {
+  if (useFirebase()) {
+    return firebaseStore.listGroups();
+  }
+
+  const currentPool = getPool();
+  if (!currentPool) {
+    return [];
+  }
+
+  try {
+    const [rows] = await currentPool.query(
+      "SELECT chat_id, chat_title, updated_at FROM bot_group_settings ORDER BY chat_title ASC"
+    );
+
+    return rows.map((row) => ({
+      chat_id: Number(row.chat_id),
+      chat_title: row.chat_title || "",
+      updated_at: row.updated_at || null
+    }));
+  } catch (_error) {
+    return [];
+  }
+}
+
 function nowSql() {
   return new Date().toISOString().slice(0, 19).replace("T", " ");
 }
@@ -514,6 +539,7 @@ module.exports = {
   getPool,
   testDbConnection,
   ensureSchema,
+  listGroups,
   ensureGroupSettings,
   getGroupSettings,
   updateGroupSettings,

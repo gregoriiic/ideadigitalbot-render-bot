@@ -73,6 +73,35 @@ function raffleEntriesCollection(chatId) {
   return raffleDoc(chatId).collection("entries");
 }
 
+async function listGroups() {
+  const db = getFirestore();
+  if (!db) {
+    return [];
+  }
+
+  try {
+    const snapshot = await db.collection("groups").get();
+    return snapshot.docs
+      .map((doc) => {
+        const data = doc.data() || {};
+        return {
+          chat_id: Number(data.chat_id || doc.id),
+          chat_title: String(data.chat_title || "").trim(),
+          group_language: normalizeLocale(data.group_language || "es"),
+          updated_at: data.updated_at || null
+        };
+      })
+      .filter((group) => Number.isFinite(group.chat_id))
+      .sort((a, b) => {
+        const left = (a.chat_title || "").toLowerCase();
+        const right = (b.chat_title || "").toLowerCase();
+        return left.localeCompare(right);
+      });
+  } catch (_error) {
+    return [];
+  }
+}
+
 function buildRoundId(chatId) {
   return `${chatId}:active`;
 }
@@ -381,6 +410,7 @@ module.exports = {
   hasFirebaseConfig,
   testConnection,
   ensureSchema,
+  listGroups,
   ensureGroupSettings,
   getGroupSettings,
   updateGroupSettings,

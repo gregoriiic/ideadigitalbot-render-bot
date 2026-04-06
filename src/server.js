@@ -20,6 +20,7 @@ const {
 const {
   testDbConnection,
   ensureSchema,
+  listGroups,
   ensureGroupSettings,
   getGroupSettings,
   updateGroupSettings,
@@ -125,6 +126,20 @@ app.get("/api/panel/group/:chatId/settings", async (req, res) => {
 
     const settings = await ensureGroupSettings(chatId);
     return res.json({ ok: true, settings });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ ok: false, message: error.message });
+  }
+});
+
+app.get("/api/panel/groups", async (req, res) => {
+  if (!isPanelTokenValid(req)) {
+    return res.status(403).json({ ok: false, message: "Invalid panel token." });
+  }
+
+  try {
+    const groups = await listGroups();
+    return res.json({ ok: true, groups });
   } catch (error) {
     console.error(error);
     return res.status(500).json({ ok: false, message: error.message });
@@ -331,12 +346,17 @@ async function handlePrivateText(message, text) {
       return;
     }
 
-    await sendMessage(chatId, buildPrivateWelcomeText("es"));
+    await sendMessage(chatId, buildPrivateWelcomeText("es"), buildPrivateHomeKeyboard("es"));
     return;
   }
 
   if (command === "/help") {
-    await sendMessage(chatId, buildPrivateHelpText("es"));
+    await sendMessage(chatId, buildPrivateHelpText("es"), buildPrivateHomeKeyboard("es"));
+    return;
+  }
+
+  if (command === "/settings") {
+    await showPrivateGroups(chatId, from.id, "es");
     return;
   }
 
@@ -375,7 +395,7 @@ async function handlePrivateText(message, text) {
   await clearUserState(from.id);
   await sendMessage(
     chatId,
-    `${escapeHtml(tForSettings(updated, "private_saved", { group: updated.chat_title || String(targetChatId) }))}\n\n${buildSettingPreview(actionKey, actionKey === "language" ? getLocaleLabel(updated.group_language) : updated[field], updated)}`,
+    `${escapeHtml(tForSettings(updated, "private_saved", { group: updated.chat_title || "Grupo" }))}\n\n${buildSettingPreview(actionKey, actionKey === "language" ? getLocaleLabel(updated.group_language) : updated[field], updated)}`,
     buildManageKeyboard(targetChatId, updated)
   );
 }
@@ -392,8 +412,8 @@ async function handlePrivateManageStart(privateChatId, userId, targetChatId) {
   const settings = await ensureGroupSettings(targetChatId, title);
   await sendMessage(
     privateChatId,
-    `<b>${escapeHtml(tForSettings(settings, "private_manage_title", { group: title || String(targetChatId) }))}</b>\n${escapeHtml(tForSettings(settings, "private_manage_subtitle"))}`,
-    buildManageKeyboard(targetChatId, settings)
+    buildConfigMenuText(settings),
+    buildConfigCategoryKeyboard(targetChatId, settings, "main")
   );
 }
 
@@ -405,10 +425,123 @@ async function handleCallbackQuery(callback) {
     return;
   }
 
+  if (data.indexOf("home:") === 0) {
+    await handleHomeCallback(callback);
+    return;
+  }
+
+  if (data.indexOf("cfgmenu:") === 0) {
+    await handleConfigMenuCallback(callback);
+    return;
+  }
+
   if (data.indexOf("cfg:") === 0) {
     await handleConfigCallback(callback);
     return;
   }
+}
+
+async function handleHomeCallback(callback) {
+  const action = String(callback.data || "").split(":")[1] || "";
+  const privateChatId = callback.message.chat.id;
+  const userId = callback.from.id;
+  const locale = "es";
+
+  if (action === "groups") {
+    await answerCallbackQuery(callback.id, "Abriendo grupos");
+    await showPrivateGroups(privateChatId, userId, locale);
+    return;
+  }
+
+  if (action === "languages") {
+    await answerCallbackQuery(callback.id, "Idiomas");
+    await sendMessage(
+      privateChatId,
+      `<b>${escapeHtml(tForLocale(locale, "preview_language"))}</b>\n${escapeHtml(formatLocaleOptions(locale))}`,
+      buildPrivateHomeKeyboard(locale)
+    );
+    return;
+  }
+
+  if (action === "help") {
+    await answerCallbackQuery(callback.id, tForLocale(locale, "preview_ready"));
+    await sendMessage(privateChatId, buildPrivateHelpText(locale), buildPrivateHomeKeyboard(locale));
+  }
+}
+
+async function showPrivateGroups(privateChatId, userId, locale = "es") {
+  const groups = await listGroups();
+  const available = [];
+
+  for (const group of groups) {
+    if (!group || !Number.isFinite(group.chat_id)) {
+      continue;
+    }
+
+    const member = await getChatMember(group.chat_id, userId);
+    if (member.ok && isMemberAdminStatus(member.result.status)) {
+      available.push(group);
+    }
+  }
+
+  if (!available.length) {
+    await sendMessage(
+      privateChatId,
+      "Aun no tienes grupos sincronizados. Agrega el bot a un grupo y usa /PanelBot dentro del grupo para empezar.",
+      buildPrivateHomeKeyboard(locale)
+    );
+    return;
+  }
+
+  const keyboard = {
+    reply_markup: {
+      inline_keyboard: available.map((group) => [
+        {
+          text: group.chat_title || "Grupo sin nombre",
+          url: `https://t.me/${config.botUsername}?start=manage_${group.chat_id}`
+        }
+      ])
+    }
+  };
+
+  await sendMessage(
+    privateChatId,
+    "<b>Configuracion de grupos</b>\nSelecciona un grupo para administrarlo.",
+    keyboard
+  );
+}
+
+async function handleConfigMenuCallback(callback) {
+  const parts = String(callback.data || "").split(":");
+  const page = parts[1] || "main";
+  const targetChatId = Number(parts[2]);
+  const privateChatId = callback.message.chat.id;
+  const userId = callback.from.id;
+  const settings = await ensureGroupSettings(targetChatId);
+
+  if (!(await isGroupAdmin(targetChatId, userId))) {
+    await answerCallbackQuery(callback.id, tForSettings(settings, "private_not_admin"));
+    return;
+  }
+
+  if (page === "close") {
+    await answerCallbackQuery(callback.id, tForSettings(settings, "cancelled"));
+    await sendMessage(privateChatId, "Panel cerrado.", buildPrivateHomeKeyboard("es"));
+    return;
+  }
+
+  if (page === "pending") {
+    await answerCallbackQuery(callback.id, "Disponible pronto");
+    return;
+  }
+
+  const pageToRender = page === "more" ? "more" : "main";
+  await answerCallbackQuery(callback.id, tForSettings(settings, "preview_ready"));
+  await sendMessage(
+    privateChatId,
+    buildConfigMenuText(settings),
+    buildConfigCategoryKeyboard(targetChatId, settings, pageToRender)
+  );
 }
 
 async function handleConfigCallback(callback) {
@@ -638,7 +771,7 @@ async function handleStaffCommand(chatId, chatTitle = "") {
     const user = item.user || {};
     const title = classifyAdmin(item, settings);
     const name = user.username ? `@${user.username}` : [user.first_name, user.last_name].filter(Boolean).join(" ");
-    lines.push(`• <b>${escapeHtml(title)}</b>: ${escapeHtml(name || String(user.id || ""))}`);
+    lines.push(`- <b>${escapeHtml(title)}</b>: ${escapeHtml(name || String(user.id || ""))}`);
   });
 
   await sendMessage(chatId, lines.join("\n"));
@@ -712,12 +845,101 @@ function buildManageKeyboard(chatId, settings = { group_language: "es" }) {
   };
 }
 
+function buildConfigMenuText(settings) {
+  return [
+    "<b>CONFIGURACION</b>",
+    `Grupo: <b>${escapeHtml(settings.chat_title || "Grupo sincronizado")}</b>`,
+    "",
+    "Elige cual de los ajustes quieres editar."
+  ].join("\n");
+}
+
+function buildConfigCategoryKeyboard(chatId, settings, page = "main") {
+  if (page === "more") {
+    return {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "📁 Temas / Topics", callback_data: `cfgmenu:pending:${chatId}` }],
+          [{ text: "🔤 Palabras Prohibidas", callback_data: `cfgmenu:pending:${chatId}` }],
+          [{ text: "🕘 Mensajes Recurrentes", callback_data: `cfgmenu:pending:${chatId}` }],
+          [{ text: "👥 Gestion de Miembros", callback_data: `cfgmenu:pending:${chatId}` }],
+          [{ text: "🫥 Usuarios enmascarados", callback_data: `cfgmenu:pending:${chatId}` }],
+          [{ text: "📱 Comandos Personales", callback_data: `cfgmenu:pending:${chatId}` }],
+          [
+            { text: "◀️ Volver", callback_data: `cfgmenu:main:${chatId}` },
+            { text: "✅ Cerrar", callback_data: `cfgmenu:close:${chatId}` },
+            { text: "🌐 Lang", callback_data: `cfg:${chatId}:language` }
+          ]
+        ]
+      }
+    };
+  }
+
+  return {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: "📜 Reglamento", callback_data: `cfg:${chatId}:rules` },
+          { text: "🛡️ Antispam", callback_data: `cfgmenu:pending:${chatId}` }
+        ],
+        [
+          { text: "💬 Bienvenida", callback_data: `cfg:${chatId}:welcome` },
+          { text: "🌊 Anti-flood", callback_data: `cfgmenu:pending:${chatId}` }
+        ],
+        [
+          { text: "🧠 Captcha", callback_data: `cfgmenu:pending:${chatId}` },
+          { text: "🧪 Filtros", callback_data: `cfgmenu:pending:${chatId}` }
+        ],
+        [
+          { text: "🚨 Advertencias", callback_data: `cfg:${chatId}:warning` },
+          { text: "🎁 Sorteo", callback_data: `cfg:${chatId}:raffle_intro` }
+        ],
+        [
+          { text: "👥 Staff", callback_data: `cfgmenu:pending:${chatId}` },
+          { text: "🔗 Enlace del grupo", callback_data: `cfgmenu:pending:${chatId}` }
+        ],
+        [
+          { text: "🌐 Lang", callback_data: `cfg:${chatId}:language` },
+          { text: "✅ Cerrar", callback_data: `cfgmenu:close:${chatId}` },
+          { text: "▶️ Mas", callback_data: `cfgmenu:more:${chatId}` }
+        ]
+      ]
+    }
+  };
+}
+
 function buildPrivateWelcomeText(locale = "es") {
   return [
     `<b>${escapeHtml(tForLocale(locale, "private_welcome_title"))}</b>`,
     "",
-    escapeHtml(tForLocale(locale, "private_welcome_body"))
+    "Este es tu centro privado para administrar el bot y tus grupos.",
+    "",
+    "Agregame a un grupo como administrador y usa los botones de abajo para configurar idiomas, mensajes y sorteos."
   ].join("\n");
+}
+
+function buildPrivateHomeKeyboard(locale = "es") {
+  const addUrl = config.botUsername ? `https://t.me/${config.botUsername}?startgroup=true` : config.panelUrl;
+
+  return {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: "➕ Agregame a un grupo ➕", url: addUrl }
+        ],
+        [
+          { text: "⚙️ Configuracion de grupos", callback_data: "home:groups" }
+        ],
+        [
+          { text: "🧩 Panel web", url: `${config.panelUrl}/dashboard.php` },
+          { text: "🌐 Languages", callback_data: "home:languages" }
+        ],
+        [
+          { text: "ℹ️ Ayuda", callback_data: "home:help" }
+        ]
+      ]
+    }
+  };
 }
 
 function buildPrivateHelpText(locale = "es") {
