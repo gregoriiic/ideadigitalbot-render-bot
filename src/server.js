@@ -346,7 +346,7 @@ async function handlePrivateText(message, text) {
       return;
     }
 
-    await sendMessage(chatId, buildPrivateWelcomeText("es"), buildPrivateHomeKeyboard("es"));
+    await showPrivateStart(chatId, from.id, "es");
     return;
   }
 
@@ -355,7 +355,7 @@ async function handlePrivateText(message, text) {
     return;
   }
 
-  if (command === "/settings") {
+  if (command === "/settings" || command === "/panel" || command === "/panelbot") {
     await showPrivateGroups(chatId, from.id, "es");
     return;
   }
@@ -430,6 +430,11 @@ async function handleCallbackQuery(callback) {
     return;
   }
 
+  if (data.indexOf("pickgroup:") === 0) {
+    await handlePickGroupCallback(callback);
+    return;
+  }
+
   if (data.indexOf("cfgmenu:") === 0) {
     await handleConfigMenuCallback(callback);
     return;
@@ -469,7 +474,49 @@ async function handleHomeCallback(callback) {
   }
 }
 
+async function showPrivateStart(privateChatId, userId, locale = "es") {
+  const groups = await getManageableGroups(userId);
+
+  if (groups.length) {
+    await sendMessage(
+      privateChatId,
+      [
+        `<b>${escapeHtml(tForLocale(locale, "private_group_picker_title"))}</b>`,
+        "",
+        escapeHtml(tForLocale(locale, "private_group_picker_body"))
+      ].join("\n"),
+      buildPrivateGroupsKeyboard(groups, locale)
+    );
+    return;
+  }
+
+  await sendMessage(privateChatId, buildPrivateWelcomeText(locale), buildPrivateHomeKeyboard(locale));
+}
+
 async function showPrivateGroups(privateChatId, userId, locale = "es") {
+  const available = await getManageableGroups(userId);
+
+  if (!available.length) {
+    await sendMessage(
+      privateChatId,
+      escapeHtml(tForLocale(locale, "private_no_groups")),
+      buildPrivateHomeKeyboard(locale)
+    );
+    return;
+  }
+
+  await sendMessage(
+    privateChatId,
+    [
+      `<b>${escapeHtml(tForLocale(locale, "private_group_picker_title"))}</b>`,
+      "",
+      escapeHtml(tForLocale(locale, "private_group_picker_body"))
+    ].join("\n"),
+    buildPrivateGroupsKeyboard(available, locale)
+  );
+}
+
+async function getManageableGroups(userId) {
   const groups = await listGroups();
   const available = [];
 
@@ -484,31 +531,22 @@ async function showPrivateGroups(privateChatId, userId, locale = "es") {
     }
   }
 
-  if (!available.length) {
-    await sendMessage(
-      privateChatId,
-      "Aun no tienes grupos sincronizados. Agrega el bot a un grupo y usa /PanelBot dentro del grupo para empezar.",
-      buildPrivateHomeKeyboard(locale)
-    );
+  return available;
+}
+
+async function handlePickGroupCallback(callback) {
+  const parts = String(callback.data || "").split(":");
+  const targetChatId = Number(parts[1]);
+  const privateChatId = callback.message.chat.id;
+  const userId = callback.from.id;
+
+  await answerCallbackQuery(callback.id, "Abriendo grupo");
+
+  if (!Number.isFinite(targetChatId)) {
     return;
   }
 
-  const keyboard = {
-    reply_markup: {
-      inline_keyboard: available.map((group) => [
-        {
-          text: group.chat_title || "Grupo sin nombre",
-          url: `https://t.me/${config.botUsername}?start=manage_${group.chat_id}`
-        }
-      ])
-    }
-  };
-
-  await sendMessage(
-    privateChatId,
-    "<b>Configuracion de grupos</b>\nSelecciona un grupo para administrarlo.",
-    keyboard
-  );
+  await handlePrivateManageStart(privateChatId, userId, targetChatId);
 }
 
 async function handleConfigMenuCallback(callback) {
@@ -936,6 +974,31 @@ function buildPrivateHomeKeyboard(locale = "es") {
         ],
         [
           { text: "ℹ️ Ayuda", callback_data: "home:help" }
+        ]
+      ]
+    }
+  };
+}
+
+function buildPrivateGroupsKeyboard(groups, locale = "es") {
+  const addUrl = config.botUsername ? `https://t.me/${config.botUsername}?startgroup=true` : config.panelUrl;
+  const groupRows = groups.map((group) => [
+    {
+      text: group.chat_title || "Grupo sin nombre",
+      callback_data: `pickgroup:${group.chat_id}`
+    }
+  ]);
+
+  return {
+    reply_markup: {
+      inline_keyboard: [
+        ...groupRows,
+        [
+          { text: "Panel web", url: `${config.panelUrl}/dashboard.php` },
+          { text: "Agregar grupo", url: addUrl }
+        ],
+        [
+          { text: "Ayuda", callback_data: "home:help" }
         ]
       ]
     }

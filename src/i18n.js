@@ -57,6 +57,10 @@ const STRINGS = {
     private_welcome_title: "Ideadigital Bot",
     private_welcome_body:
       "Este chat privado es tu centro de control del bot.\nUsa /panel dentro de un grupo o /panelbot en un grupo donde seas admin para recibir el boton de administracion privada.",
+    private_group_picker_title: "Configuracion de grupos",
+    private_group_picker_body: "Selecciona el grupo que quieres editar desde este menu privado.",
+    private_no_groups:
+      "Aun no tienes grupos sincronizados. Agrega el bot a un grupo como administrador y luego usa /start aqui para administrarlo.",
     private_help_title: "Ayuda privada",
     private_help_body:
       "Usa el menu privado para editar:\n- Mensaje de bienvenida\n- Mensaje de advertencia\n- Reglas del sorteo\n- Texto principal del sorteo\n- Idioma del grupo",
