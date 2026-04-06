@@ -15,7 +15,9 @@ const {
   answerCallbackQuery,
   getChatMember,
   getChatAdministrators,
-  setWebhook
+  setWebhook,
+  restrictChatMember,
+  banChatMember
 } = require("./telegram");
 const {
   testDbConnection,
@@ -43,10 +45,13 @@ app.use(express.json());
 const ACTION_TO_FIELD = {
   welcome: "welcome_message",
   warning: "warning_message",
-  rules: "raffle_rules_text",
+  rules: "group_rules_text",
   raffle_intro: "raffle_intro_text",
-  language: "group_language"
+  language: "group_language",
+  antispam_duration: "antispam_duration_text"
 };
+
+const spamTracker = new Map();
 
 app.get("/", async (_req, res) => {
   const dbStatus = await testDbConnection();
@@ -177,8 +182,24 @@ app.post("/api/panel/group/:chatId/settings", async (req, res) => {
       patch.raffle_rules_text = body.raffle_rules_text.trim();
     }
 
+    if (typeof body.group_rules_text === "string") {
+      patch.group_rules_text = body.group_rules_text.trim();
+    }
+
     if (typeof body.raffle_intro_text === "string") {
       patch.raffle_intro_text = body.raffle_intro_text.trim();
+    }
+
+    if (typeof body.antispam_enabled === "boolean") {
+      patch.antispam_enabled = body.antispam_enabled;
+    }
+
+    if (typeof body.antispam_action === "string") {
+      patch.antispam_action = body.antispam_action.trim();
+    }
+
+    if (typeof body.antispam_duration_text === "string") {
+      patch.antispam_duration_text = body.antispam_duration_text.trim();
     }
 
     const settings = await updateGroupSettings(chatId, patch);
@@ -273,6 +294,7 @@ async function handleMessage(message) {
   }
 
   if (!text.startsWith("/")) {
+    await maybeHandleAntispam(chat, from, message);
     return;
   }
 
@@ -291,9 +313,9 @@ async function handleMessage(message) {
     return;
   }
 
-  if (command === "/reglas") {
+  if (command === "/reglas" || command === "/rules") {
     const settings = await ensureGroupSettings(chat.id, chat.title || "");
-    await sendMessage(chat.id, settings.raffle_rules_text || tForSettings(settings, "rules_empty"));
+    await sendMessage(chat.id, settings.group_rules_text || tForSettings(settings, "rules_empty"));
     await cleanupCommandMessage(message);
     return;
   }
@@ -471,6 +493,11 @@ async function handleCallbackQuery(callback) {
     return;
   }
 
+  if (data.indexOf("antispam:") === 0) {
+    await handleAntispamActionCallback(callback);
+    return;
+  }
+
   if (data.indexOf("cfg:") === 0) {
     await handleConfigCallback(callback);
     return;
@@ -633,6 +660,17 @@ async function handleConfigMenuCallback(callback) {
     return;
   }
 
+  if (page === "antispam") {
+    await answerCallbackQuery(callback.id, tForSettings(settings, "preview_ready"));
+    await editMessageText(
+      privateChatId,
+      callback.message.message_id,
+      buildAntispamConfigText(settings),
+      buildAntispamConfigKeyboard(targetChatId, settings)
+    );
+    return;
+  }
+
   const pageToRender = page === "more" ? "more" : "main";
   await answerCallbackQuery(callback.id, tForSettings(settings, "preview_ready"));
   await editMessageText(
@@ -695,6 +733,62 @@ async function handleConfigCallback(callback) {
         ]
       }
     }
+  );
+}
+
+async function handleAntispamActionCallback(callback) {
+  const parts = String(callback.data || "").split(":");
+  const targetChatId = Number(parts[1]);
+  const action = parts[2] || "";
+  const privateChatId = callback.message.chat.id;
+  const userId = callback.from.id;
+  const settings = await ensureGroupSettings(targetChatId);
+
+  if (!(await isGroupAdmin(targetChatId, userId))) {
+    await answerCallbackQuery(callback.id, tForSettings(settings, "private_not_admin"));
+    return;
+  }
+
+  let updated = settings;
+
+  if (action === "toggle") {
+    updated = await updateGroupSettings(targetChatId, {
+      antispam_enabled: !Boolean(settings.antispam_enabled)
+    });
+  } else if (action === "cycle") {
+    const order = ["warn", "mute", "kick"];
+    const current = order.includes(settings.antispam_action) ? settings.antispam_action : "warn";
+    const next = order[(order.indexOf(current) + 1) % order.length];
+    updated = await updateGroupSettings(targetChatId, {
+      antispam_action: next
+    });
+  } else if (action === "duration") {
+    await setUserState(userId, targetChatId, "antispam_duration", callback.message.message_id);
+    await answerCallbackQuery(callback.id, tForSettings(settings, "send_new_text"));
+    await editMessageText(
+      privateChatId,
+      callback.message.message_id,
+      buildEditPrompt("antispam_duration", settings),
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: "◀️ Volver", callback_data: `cfgmenu:antispam:${targetChatId}` },
+              { text: "✅ Cerrar", callback_data: `cfgmenu:close:${targetChatId}` }
+            ]
+          ]
+        }
+      }
+    );
+    return;
+  }
+
+  await answerCallbackQuery(callback.id, tForSettings(updated, "preview_ready"));
+  await editMessageText(
+    privateChatId,
+    callback.message.message_id,
+    buildAntispamConfigText(updated),
+    buildAntispamConfigKeyboard(targetChatId, updated)
   );
 }
 
@@ -886,14 +980,89 @@ async function handleStaffCommand(chatId, chatTitle = "") {
 
   const lines = [`<b>${escapeHtml(tForSettings(settings, "group_staff_title"))}</b>`];
 
-  admins.result.forEach((item) => {
-    const user = item.user || {};
-    const title = classifyAdmin(item, settings);
-    const name = user.username ? `@${user.username}` : [user.first_name, user.last_name].filter(Boolean).join(" ");
-    lines.push(`- <b>${escapeHtml(title)}</b>: ${escapeHtml(name || String(user.id || ""))}`);
+  const rankedAdmins = admins.result
+    .map((item) => ({
+      rank: classifyAdmin(item, settings),
+      mention: formatAdminMention(item)
+    }))
+    .sort((left, right) => staffRankWeight(right.rank) - staffRankWeight(left.rank));
+
+  rankedAdmins.forEach((item) => {
+    if (!item.mention) {
+      return;
+    }
+
+    lines.push(`- <b>${escapeHtml(item.rank)}</b>: ${item.mention}`);
   });
 
+  if (lines.length === 1) {
+    lines.push(escapeHtml(tForSettings(settings, "staff_unavailable")));
+  }
+
   await sendMessage(chatId, lines.join("\n"));
+}
+
+function formatAdminMention(item) {
+  const user = item.user || {};
+  if (!user.id) {
+    return "";
+  }
+
+  const label = user.username
+    ? `@${String(user.username).replace(/^@/, "")}`
+    : [user.first_name, user.last_name].filter(Boolean).join(" ") || String(user.id);
+
+  return `<a href="tg://user?id=${user.id}">${escapeHtml(label)}</a>`;
+}
+
+function staffRankWeight(rank) {
+  if (rank === "Propietario") {
+    return 3;
+  }
+
+  if (rank === "Co-Lider") {
+    return 2;
+  }
+
+  return 1;
+}
+
+function countAdminPermissions(item) {
+  const keys = [
+    "can_manage_chat",
+    "can_delete_messages",
+    "can_manage_video_chats",
+    "can_restrict_members",
+    "can_promote_members",
+    "can_change_info",
+    "can_invite_users",
+    "can_pin_messages",
+    "can_manage_topics",
+    "can_post_messages",
+    "can_edit_messages"
+  ];
+
+  return keys.reduce((total, key) => total + (item[key] ? 1 : 0), 0);
+}
+
+function classifyAdmin(item, settings = { group_language: "es" }) {
+  const status = item.status;
+
+  if (status === "creator") {
+    return "Propietario";
+  }
+
+  const permissionCount = countAdminPermissions(item);
+
+  if (permissionCount >= 8) {
+    return "Propietario";
+  }
+
+  if (permissionCount >= 5) {
+    return "Co-Lider";
+  }
+
+  return "Lider";
 }
 
 async function handleWelcomeMessage(chat, newMembers) {
@@ -999,7 +1168,7 @@ function buildConfigCategoryKeyboard(chatId, settings, page = "main") {
       inline_keyboard: [
         [
           { text: "📜 Reglamento", callback_data: `cfg:${chatId}:rules` },
-          { text: "🛡️ Antispam", callback_data: `cfgmenu:pending:${chatId}` }
+          { text: "🛡️ Antispam", callback_data: `cfgmenu:antispam:${chatId}` }
         ],
         [
           { text: "💬 Bienvenida", callback_data: `cfg:${chatId}:welcome` },
@@ -1055,6 +1224,48 @@ function buildRaffleConfigKeyboard(chatId, settings) {
   return {
     reply_markup: {
       inline_keyboard: rows
+    }
+  };
+}
+
+function buildAntispamConfigText(settings) {
+  return [
+    "<b>CONFIGURACION ANTISPAM</b>",
+    `Grupo: <b>${escapeHtml(settings.chat_title || "Grupo sincronizado")}</b>`,
+    "",
+    `Estado: <b>${settings.antispam_enabled ? "Activado" : "Desactivado"}</b>`,
+    `Sancion: <b>${escapeHtml(formatAntispamAction(settings.antispam_action))}</b>`,
+    `Duracion del mute: <b>${escapeHtml(settings.antispam_duration_text || "24 h")}</b>`,
+    "",
+    "Cuando detecta spam, el bot elimina el mensaje, advierte al usuario y aplica la sancion configurada."
+  ].join("\n");
+}
+
+function buildAntispamConfigKeyboard(chatId, settings) {
+  return {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          {
+            text: settings.antispam_enabled ? "🟢 Desactivar" : "🔴 Activar",
+            callback_data: `antispam:${chatId}:toggle`
+          },
+          {
+            text: `⚖️ ${formatAntispamAction(settings.antispam_action)}`,
+            callback_data: `antispam:${chatId}:cycle`
+          }
+        ],
+        [
+          {
+            text: `⏱️ Duracion: ${settings.antispam_duration_text || "24 h"}`,
+            callback_data: `antispam:${chatId}:duration`
+          }
+        ],
+        [
+          { text: "◀️ Volver", callback_data: `cfgmenu:main:${chatId}` },
+          { text: "✅ Cerrar", callback_data: `cfgmenu:close:${chatId}` }
+        ]
+      ]
     }
   };
 }
@@ -1167,15 +1378,17 @@ function buildEditPrompt(action, settings) {
     warning: tForSettings(settings, "prompt_warning"),
     rules: tForSettings(settings, "prompt_rules"),
     raffle_intro: tForSettings(settings, "prompt_raffle_intro"),
-    language: `${tForSettings(settings, "prompt_language")}\n\n${formatLocaleOptions(getGroupLocale(settings))}`
+    language: `${tForSettings(settings, "prompt_language")}\n\n${formatLocaleOptions(getGroupLocale(settings))}`,
+    antispam_duration: "Envia la duracion del mute. Ejemplo: 1 d 24 h 17 m"
   };
 
   const currentValue = {
     welcome: settings.welcome_message,
     warning: settings.warning_message,
-    rules: settings.raffle_rules_text,
+    rules: settings.group_rules_text,
     raffle_intro: settings.raffle_intro_text,
-    language: `${getGroupLocale(settings).toUpperCase()} - ${getLocaleLabel(getGroupLocale(settings))}`
+    language: `${getGroupLocale(settings).toUpperCase()} - ${getLocaleLabel(getGroupLocale(settings))}`,
+    antispam_duration: settings.antispam_duration_text || "24 h"
   };
 
   return [
@@ -1247,21 +1460,6 @@ function extractCommand(text) {
   const first = String(text || "").split(/\s+/)[0] || "";
   const base = first.split("@")[0];
   return base.toLowerCase();
-}
-
-function classifyAdmin(item, settings = { group_language: "es" }) {
-  const status = item.status;
-  const customTitle = item.custom_title;
-
-  if (status === "creator") {
-    return tForSettings(settings, "founder");
-  }
-
-  if (customTitle) {
-    return customTitle;
-  }
-
-  return tForSettings(settings, "administrator");
 }
 
 function formatEntryName(entry) {
