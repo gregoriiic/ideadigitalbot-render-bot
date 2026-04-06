@@ -393,14 +393,36 @@ async function handlePrivateText(message, text) {
   }
 
   await clearUserState(from.id);
-  await sendMessage(
+  const panelMessageId = Number(state.panel_message_id);
+  const confirmationText = [
+    `<b>${escapeHtml(tForSettings(updated, "private_saved", { group: updated.chat_title || "Grupo" }))}</b>`,
+    "",
+    buildSettingPreview(
+      actionKey,
+      actionKey === "language" ? getLocaleLabel(updated.group_language) : updated[field],
+      updated
+    ),
+    "",
+    buildConfigMenuText(updated)
+  ].join("\n");
+
+  const edited = await editPanelMessage(
     chatId,
-    `${escapeHtml(tForSettings(updated, "private_saved", { group: updated.chat_title || "Grupo" }))}\n\n${buildSettingPreview(actionKey, actionKey === "language" ? getLocaleLabel(updated.group_language) : updated[field], updated)}`,
-    buildManageKeyboard(targetChatId, updated)
+    panelMessageId,
+    confirmationText,
+    buildConfigCategoryKeyboard(targetChatId, updated, "main")
   );
+
+  if (!edited) {
+    await sendMessage(
+      chatId,
+      confirmationText,
+      buildConfigCategoryKeyboard(targetChatId, updated, "main")
+    );
+  }
 }
 
-async function handlePrivateManageStart(privateChatId, userId, targetChatId) {
+async function handlePrivateManageStart(privateChatId, userId, targetChatId, panelMessageId = null) {
   const member = await getChatMember(targetChatId, userId);
 
   if (!member.ok || !isMemberAdminStatus(member.result.status)) {
@@ -410,11 +432,20 @@ async function handlePrivateManageStart(privateChatId, userId, targetChatId) {
 
   const title = member.result.chat ? member.result.chat.title : "";
   const settings = await ensureGroupSettings(targetChatId, title);
-  await sendMessage(
+  const edited = await editPanelMessage(
     privateChatId,
+    panelMessageId,
     buildConfigMenuText(settings),
     buildConfigCategoryKeyboard(targetChatId, settings, "main")
   );
+
+  if (!edited) {
+    await sendMessage(
+      privateChatId,
+      buildConfigMenuText(settings),
+      buildConfigCategoryKeyboard(targetChatId, settings, "main")
+    );
+  }
 }
 
 async function handleCallbackQuery(callback) {
@@ -450,18 +481,20 @@ async function handleHomeCallback(callback) {
   const action = String(callback.data || "").split(":")[1] || "";
   const privateChatId = callback.message.chat.id;
   const userId = callback.from.id;
+  const panelMessageId = callback.message.message_id;
   const locale = "es";
 
   if (action === "groups") {
     await answerCallbackQuery(callback.id, "Abriendo grupos");
-    await showPrivateGroups(privateChatId, userId, locale);
+    await showPrivateGroups(privateChatId, userId, locale, panelMessageId);
     return;
   }
 
   if (action === "languages") {
     await answerCallbackQuery(callback.id, "Idiomas");
-    await sendMessage(
+    await editMessageText(
       privateChatId,
+      panelMessageId,
       `<b>${escapeHtml(tForLocale(locale, "preview_language"))}</b>\n${escapeHtml(formatLocaleOptions(locale))}`,
       buildPrivateHomeKeyboard(locale)
     );
@@ -470,7 +503,7 @@ async function handleHomeCallback(callback) {
 
   if (action === "help") {
     await answerCallbackQuery(callback.id, tForLocale(locale, "preview_ready"));
-    await sendMessage(privateChatId, buildPrivateHelpText(locale), buildPrivateHomeKeyboard(locale));
+    await editMessageText(privateChatId, panelMessageId, buildPrivateHelpText(locale), buildPrivateHomeKeyboard(locale));
   }
 }
 
@@ -493,27 +526,43 @@ async function showPrivateStart(privateChatId, userId, locale = "es") {
   await sendMessage(privateChatId, buildPrivateWelcomeText(locale), buildPrivateHomeKeyboard(locale));
 }
 
-async function showPrivateGroups(privateChatId, userId, locale = "es") {
+async function showPrivateGroups(privateChatId, userId, locale = "es", panelMessageId = null) {
   const available = await getManageableGroups(userId);
 
   if (!available.length) {
-    await sendMessage(
+    const edited = await editPanelMessage(
       privateChatId,
+      panelMessageId,
       escapeHtml(tForLocale(locale, "private_no_groups")),
       buildPrivateHomeKeyboard(locale)
     );
+
+    if (!edited) {
+      await sendMessage(
+        privateChatId,
+        escapeHtml(tForLocale(locale, "private_no_groups")),
+        buildPrivateHomeKeyboard(locale)
+      );
+    }
     return;
   }
 
-  await sendMessage(
+  const pickerText = [
+    `<b>${escapeHtml(tForLocale(locale, "private_group_picker_title"))}</b>`,
+    "",
+    escapeHtml(tForLocale(locale, "private_group_picker_body"))
+  ].join("\n");
+
+  const edited = await editPanelMessage(
     privateChatId,
-    [
-      `<b>${escapeHtml(tForLocale(locale, "private_group_picker_title"))}</b>`,
-      "",
-      escapeHtml(tForLocale(locale, "private_group_picker_body"))
-    ].join("\n"),
+    panelMessageId,
+    pickerText,
     buildPrivateGroupsKeyboard(available, locale)
   );
+
+  if (!edited) {
+    await sendMessage(privateChatId, pickerText, buildPrivateGroupsKeyboard(available, locale));
+  }
 }
 
 async function getManageableGroups(userId) {
@@ -546,7 +595,7 @@ async function handlePickGroupCallback(callback) {
     return;
   }
 
-  await handlePrivateManageStart(privateChatId, userId, targetChatId);
+  await handlePrivateManageStart(privateChatId, userId, targetChatId, callback.message.message_id);
 }
 
 async function handleConfigMenuCallback(callback) {
@@ -564,7 +613,7 @@ async function handleConfigMenuCallback(callback) {
 
   if (page === "close") {
     await answerCallbackQuery(callback.id, tForSettings(settings, "cancelled"));
-    await sendMessage(privateChatId, "Panel cerrado.", buildPrivateHomeKeyboard("es"));
+    await editMessageText(privateChatId, callback.message.message_id, "Panel cerrado.", buildPrivateHomeKeyboard("es"));
     return;
   }
 
@@ -573,10 +622,22 @@ async function handleConfigMenuCallback(callback) {
     return;
   }
 
+  if (page === "raffle") {
+    await answerCallbackQuery(callback.id, tForSettings(settings, "preview_ready"));
+    await editMessageText(
+      privateChatId,
+      callback.message.message_id,
+      buildRaffleConfigText(settings),
+      buildRaffleConfigKeyboard(targetChatId, settings)
+    );
+    return;
+  }
+
   const pageToRender = page === "more" ? "more" : "main";
   await answerCallbackQuery(callback.id, tForSettings(settings, "preview_ready"));
-  await sendMessage(
+  await editMessageText(
     privateChatId,
+    callback.message.message_id,
     buildConfigMenuText(settings),
     buildConfigCategoryKeyboard(targetChatId, settings, pageToRender)
   );
@@ -597,10 +658,11 @@ async function handleConfigCallback(callback) {
 
   if (action === "preview") {
     await answerCallbackQuery(callback.id, tForSettings(settings, "preview_ready"));
-    await sendMessage(
+    await editMessageText(
       privateChatId,
+      callback.message.message_id,
       buildConfigPreview(settings),
-      buildManageKeyboard(targetChatId, settings)
+      buildConfigCategoryKeyboard(targetChatId, settings, "main")
     );
     return;
   }
@@ -608,13 +670,32 @@ async function handleConfigCallback(callback) {
   if (action === "cancel") {
     await clearUserState(userId);
     await answerCallbackQuery(callback.id, tForSettings(settings, "cancelled"));
-    await sendMessage(privateChatId, tForSettings(settings, "edition_cancelled"), buildManageKeyboard(targetChatId, settings));
+    await editMessageText(
+      privateChatId,
+      callback.message.message_id,
+      `${escapeHtml(tForSettings(settings, "edition_cancelled"))}\n\n${buildConfigMenuText(settings)}`,
+      buildConfigCategoryKeyboard(targetChatId, settings, "main")
+    );
     return;
   }
 
-  await setUserState(userId, targetChatId, action);
+  await setUserState(userId, targetChatId, action, callback.message.message_id);
   await answerCallbackQuery(callback.id, tForSettings(settings, "send_new_text"));
-  await sendMessage(privateChatId, buildEditPrompt(action, settings));
+  await editMessageText(
+    privateChatId,
+    callback.message.message_id,
+    buildEditPrompt(action, settings),
+    {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "◀️ Volver", callback_data: `cfgmenu:main:${targetChatId}` },
+            { text: "✅ Cerrar", callback_data: `cfgmenu:close:${targetChatId}` }
+          ]
+        ]
+      }
+    }
+  );
 }
 
 async function handleRaffleJoin(callback) {
@@ -930,7 +1011,7 @@ function buildConfigCategoryKeyboard(chatId, settings, page = "main") {
         ],
         [
           { text: "🚨 Advertencias", callback_data: `cfg:${chatId}:warning` },
-          { text: "🎁 Sorteo", callback_data: `cfg:${chatId}:raffle_intro` }
+          { text: "🎁 Sorteo", callback_data: `cfgmenu:raffle:${chatId}` }
         ],
         [
           { text: "👥 Staff", callback_data: `cfgmenu:pending:${chatId}` },
@@ -942,6 +1023,38 @@ function buildConfigCategoryKeyboard(chatId, settings, page = "main") {
           { text: "▶️ Mas", callback_data: `cfgmenu:more:${chatId}` }
         ]
       ]
+    }
+  };
+}
+
+function buildRaffleConfigText(settings) {
+  return [
+    "<b>CONFIGURACION DEL SORTEO</b>",
+    `Grupo: <b>${escapeHtml(settings.chat_title || "Grupo sincronizado")}</b>`,
+    "",
+    "Desde aqui puedes editar el mensaje principal, las reglas y abrir la lista publica del sorteo."
+  ].join("\n");
+}
+
+function buildRaffleConfigKeyboard(chatId, settings) {
+  const listUrl = buildRaffleListUrl(chatId);
+  const rows = [
+    [
+      { text: "📜 Editar reglas", callback_data: `cfg:${chatId}:rules` },
+      { text: "📝 Editar mensaje", callback_data: `cfg:${chatId}:raffle_intro` }
+    ],
+    [
+      { text: "🌐 Ver lista publica", url: listUrl || `${config.panelUrl}/raffle_live.php?chat_id=${chatId}` }
+    ],
+    [
+      { text: "◀️ Volver", callback_data: `cfgmenu:main:${chatId}` },
+      { text: "✅ Cerrar", callback_data: `cfgmenu:close:${chatId}` }
+    ]
+  ];
+
+  return {
+    reply_markup: {
+      inline_keyboard: rows
     }
   };
 }
@@ -1161,6 +1274,19 @@ function buildRaffleListUrl(chatId) {
   }
 
   return `${config.panelUrl}/raffle_live.php?chat_id=${encodeURIComponent(String(chatId))}`;
+}
+
+async function editPanelMessage(chatId, messageId, text, replyMarkup) {
+  if (!messageId || !Number.isFinite(Number(messageId))) {
+    return false;
+  }
+
+  try {
+    const result = await editMessageText(chatId, Number(messageId), text, replyMarkup);
+    return Boolean(result && result.ok);
+  } catch (_error) {
+    return false;
+  }
 }
 
 function escapeHtml(value) {

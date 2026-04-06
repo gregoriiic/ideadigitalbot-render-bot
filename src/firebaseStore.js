@@ -210,7 +210,7 @@ async function getUserState(userId) {
   }
 }
 
-async function setUserState(userId, groupChatId, actionKey) {
+async function setUserState(userId, groupChatId, actionKey, panelMessageId = null) {
   const db = getFirestore();
   if (!db) {
     return null;
@@ -220,6 +220,7 @@ async function setUserState(userId, groupChatId, actionKey) {
     user_id: userId,
     group_chat_id: groupChatId,
     action_key: actionKey,
+    panel_message_id: panelMessageId,
     updated_at: nowIso()
   };
 

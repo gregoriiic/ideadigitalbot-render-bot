@@ -307,9 +307,9 @@ async function getUserState(userId) {
   }
 }
 
-async function setUserState(userId, groupChatId, actionKey) {
+async function setUserState(userId, groupChatId, actionKey, panelMessageId = null) {
   if (useFirebase()) {
-    return firebaseStore.setUserState(userId, groupChatId, actionKey);
+    return firebaseStore.setUserState(userId, groupChatId, actionKey, panelMessageId);
   }
 
   const currentPool = getPool();
