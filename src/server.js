@@ -17,11 +17,16 @@ const {
   getChatMember,
   getChatAdministrators,
   setWebhook,
+  deleteWebhook,
   restrictChatMember,
   banChatMember
 } = require("./telegram");
 const {
   testDbConnection,
+  listBotsByOwner,
+  registerBot,
+  disconnectBot,
+  getBotByWebhookKey,
   ensureSchema,
   listGroups,
   ensureGroupSettings,
@@ -47,6 +52,7 @@ const {
   updateSupportTicket,
   closeSupportTicket
 } = require("./db");
+const { runWithBot } = require("./botContext");
 
 const app = express();
 app.use(express.json());
@@ -230,6 +236,82 @@ app.post("/api/panel/group/:chatId/settings", async (req, res) => {
   }
 });
 
+app.get("/api/panel/bots", async (req, res) => {
+  if (!isPanelTokenValid(req)) {
+    return res.status(403).json({ ok: false, message: "Invalid panel token." });
+  }
+
+  try {
+    const ownerKey = String(req.query.owner_key || "").trim();
+    const bots = await listBotsByOwner(ownerKey);
+    return res.json({ ok: true, bots });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ ok: false, message: error.message });
+  }
+});
+
+app.post("/api/panel/bots/register", async (req, res) => {
+  if (!isPanelTokenValid(req)) {
+    return res.status(403).json({ ok: false, message: "Invalid panel token." });
+  }
+
+  try {
+    const body = req.body || {};
+    const owner = {
+      owner_key: String(body.owner_key || "").trim(),
+      owner_name: String(body.owner_name || "User").trim(),
+      owner_telegram_id: body.owner_telegram_id ? String(body.owner_telegram_id) : null
+    };
+
+    const bot = await registerBot(owner, body);
+    if (!bot) {
+      return res.status(400).json({ ok: false, message: "Missing bot data." });
+    }
+
+    const webhookUrl = `${config.appUrl}/telegram/webhook/${bot.webhook_key}`;
+    const telegram = await setWebhook(webhookUrl, bot.bot_token);
+
+    return res.json({
+      ok: true,
+      bot: {
+        id: bot.id,
+        bot_name: bot.bot_name,
+        bot_username: bot.bot_username,
+        webhook_key: bot.webhook_key,
+        webhook_url: webhookUrl
+      },
+      telegram
+    });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ ok: false, message: error.message });
+  }
+});
+
+app.post("/api/panel/bots/:botId/disconnect", async (req, res) => {
+  if (!isPanelTokenValid(req)) {
+    return res.status(403).json({ ok: false, message: "Invalid panel token." });
+  }
+
+  try {
+    const ownerKey = String((req.body || {}).owner_key || "").trim();
+    const botId = String(req.params.botId || "").trim();
+    const bots = await listBotsByOwner(ownerKey);
+    const bot = bots.find((item) => String(item.id) === botId);
+    if (!bot) {
+      return res.status(404).json({ ok: false, message: "Bot not found." });
+    }
+
+    await deleteWebhook(bot.bot_token);
+    const ok = await disconnectBot(ownerKey, botId);
+    return res.json({ ok });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ ok: false, message: error.message });
+  }
+});
+
 app.get("/telegram/set-webhook", async (_req, res) => {
   const webhookUrl = `${config.appUrl}/telegram/webhook`;
   const result = await setWebhook(webhookUrl);
@@ -239,30 +321,72 @@ app.get("/telegram/set-webhook", async (_req, res) => {
   });
 });
 
+app.get("/telegram/set-webhook/:webhookKey", async (req, res) => {
+  try {
+    const bot = await getBotByWebhookKey(req.params.webhookKey);
+    if (!bot) {
+      return res.status(404).json({ ok: false, message: "Bot not found." });
+    }
+
+    const webhookUrl = `${config.appUrl}/telegram/webhook/${bot.webhook_key}`;
+    const result = await setWebhook(webhookUrl, bot.bot_token);
+    return res.json({
+      ok: true,
+      webhook_url: webhookUrl,
+      telegram: result
+    });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ ok: false, message: error.message });
+  }
+});
+
 app.post("/telegram/webhook", async (req, res) => {
   try {
     if (!isSecretValid(req)) {
       return res.status(403).json({ ok: false, message: "Invalid secret token." });
     }
 
-    const update = req.body || {};
-
-    if (update.callback_query) {
-      await handleCallbackQuery(update.callback_query);
-      return res.json({ ok: true, update: "callback_query" });
-    }
-
-    if (update.message) {
-      await handleMessage(update.message);
-      return res.json({ ok: true, update: "message" });
-    }
-
-    return res.json({ ok: true, skipped: true });
+    return processTelegramUpdate(req.body || {}, null, res);
   } catch (error) {
     console.error(error);
     return res.status(500).json({ ok: false, message: error.message });
   }
 });
+
+app.post("/telegram/webhook/:webhookKey", async (req, res) => {
+  try {
+    if (!isSecretValid(req)) {
+      return res.status(403).json({ ok: false, message: "Invalid secret token." });
+    }
+
+    const bot = await getBotByWebhookKey(req.params.webhookKey);
+    if (!bot) {
+      return res.status(404).json({ ok: false, message: "Bot not found." });
+    }
+
+    return processTelegramUpdate(req.body || {}, bot, res);
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ ok: false, message: error.message });
+  }
+});
+
+async function processTelegramUpdate(update, bot, res) {
+  return runWithBot(bot, async () => {
+    if (update.callback_query) {
+      await handleCallbackQuery(update.callback_query);
+      return res.json({ ok: true, update: "callback_query", bot_id: bot ? bot.id : "default" });
+    }
+
+    if (update.message) {
+      await handleMessage(update.message);
+      return res.json({ ok: true, update: "message", bot_id: bot ? bot.id : "default" });
+    }
+
+    return res.json({ ok: true, skipped: true, bot_id: bot ? bot.id : "default" });
+  });
+}
 
 function isSecretValid(req) {
   if (!config.webhookSecret) {

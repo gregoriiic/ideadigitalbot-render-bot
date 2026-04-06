@@ -1,6 +1,7 @@
 const admin = require("firebase-admin");
 const config = require("./config");
 const { getDefaultGroupSettings, normalizeLocale } = require("./i18n");
+const { currentBotId } = require("./botContext");
 
 let firestore = null;
 
@@ -57,8 +58,12 @@ async function ensureSchema() {
   return testConnection();
 }
 
+function scopedGroupId(chatId) {
+  return `${currentBotId()}:${chatId}`;
+}
+
 function groupDoc(chatId) {
-  return getFirestore().collection("groups").doc(String(chatId));
+  return getFirestore().collection("groups").doc(scopedGroupId(chatId));
 }
 
 function stateDoc(userId) {
@@ -79,6 +84,120 @@ function raffleEntriesCollection(chatId) {
 
 function ticketsCollection() {
   return getFirestore().collection("tickets");
+}
+
+function botsCollection() {
+  return getFirestore().collection("bots");
+}
+
+function buildWebhookKey() {
+  return Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+}
+
+async function listBotsByOwner(ownerKey) {
+  const db = getFirestore();
+  if (!db || !ownerKey) {
+    return [];
+  }
+
+  const snap = await botsCollection()
+    .where("owner_key", "==", ownerKey)
+    .where("status", "==", "active")
+    .get();
+
+  return snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+}
+
+async function registerBot(owner, input) {
+  const db = getFirestore();
+  if (!db) {
+    return null;
+  }
+
+  const username = String(input.bot_username || "").replace(/^@/, "").trim();
+  const token = String(input.bot_token || "").trim();
+  const name = String(input.bot_name || "").trim();
+  const ownerKey = String(owner.owner_key || "").trim();
+
+  if (!ownerKey || !username || !token || !name) {
+    return null;
+  }
+
+  const existing = await botsCollection()
+    .where("owner_key", "==", ownerKey)
+    .where("bot_username", "==", username)
+    .limit(1)
+    .get();
+
+  const ref = existing.empty ? botsCollection().doc() : existing.docs[0].ref;
+  const webhookKey = existing.empty
+    ? buildWebhookKey()
+    : String((existing.docs[0].data() || {}).webhook_key || buildWebhookKey());
+
+  const payload = {
+    owner_key: ownerKey,
+    owner_name: owner.owner_name || "User",
+    owner_telegram_id: owner.owner_telegram_id || null,
+    bot_name: name,
+    bot_username: username,
+    bot_token: token,
+    webhook_key: webhookKey,
+    status: "active",
+    updated_at: nowIso(),
+    created_at: existing.empty ? nowIso() : ((existing.docs[0].data() || {}).created_at || nowIso())
+  };
+
+  await ref.set(payload, { merge: true });
+  const snap = await ref.get();
+  return { id: ref.id, ...snap.data() };
+}
+
+async function disconnectBot(ownerKey, botId) {
+  const db = getFirestore();
+  if (!db || !ownerKey || !botId) {
+    return false;
+  }
+
+  const ref = botsCollection().doc(String(botId));
+  const snap = await ref.get();
+  if (!snap.exists) {
+    return false;
+  }
+
+  const data = snap.data() || {};
+  if (String(data.owner_key || "") !== String(ownerKey)) {
+    return false;
+  }
+
+  await ref.set(
+    {
+      status: "disconnected",
+      disconnected_at: nowIso(),
+      updated_at: nowIso()
+    },
+    { merge: true }
+  );
+
+  return true;
+}
+
+async function getBotByWebhookKey(webhookKey) {
+  const db = getFirestore();
+  if (!db || !webhookKey) {
+    return null;
+  }
+
+  const snap = await botsCollection()
+    .where("webhook_key", "==", String(webhookKey))
+    .where("status", "==", "active")
+    .limit(1)
+    .get();
+
+  if (snap.empty) {
+    return null;
+  }
+
+  return { id: snap.docs[0].id, ...snap.docs[0].data() };
 }
 
 async function listGroups() {
@@ -579,6 +698,10 @@ module.exports = {
   hasFirebaseConfig,
   testConnection,
   ensureSchema,
+  listBotsByOwner,
+  registerBot,
+  disconnectBot,
+  getBotByWebhookKey,
   listGroups,
   ensureGroupSettings,
   getGroupSettings,

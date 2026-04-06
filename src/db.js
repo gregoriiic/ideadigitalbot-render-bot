@@ -62,6 +62,38 @@ async function testDbConnection() {
   }
 }
 
+async function listBotsByOwner(ownerKey) {
+  if (useFirebase()) {
+    return firebaseStore.listBotsByOwner(ownerKey);
+  }
+
+  return [];
+}
+
+async function registerBot(owner, input) {
+  if (useFirebase()) {
+    return firebaseStore.registerBot(owner, input);
+  }
+
+  return null;
+}
+
+async function disconnectBot(ownerKey, botId) {
+  if (useFirebase()) {
+    return firebaseStore.disconnectBot(ownerKey, botId);
+  }
+
+  return false;
+}
+
+async function getBotByWebhookKey(webhookKey) {
+  if (useFirebase()) {
+    return firebaseStore.getBotByWebhookKey(webhookKey);
+  }
+
+  return null;
+}
+
 async function ensureSchema() {
   if (useFirebase()) {
     return firebaseStore.ensureSchema();
@@ -602,6 +634,10 @@ async function closeSupportTicket(ticketId, reason) {
 module.exports = {
   getPool,
   testDbConnection,
+  listBotsByOwner,
+  registerBot,
+  disconnectBot,
+  getBotByWebhookKey,
   ensureSchema,
   listGroups,
   ensureGroupSettings,
