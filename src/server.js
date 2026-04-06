@@ -562,11 +562,12 @@ async function handleHomeCallback(callback) {
   }
 
   if (action === "support") {
+    const groups = await getManageableGroups(userId);
     await answerCallbackQuery(callback.id, "Customer service");
     await editMessageText(
       privateChatId,
       panelMessageId,
-      buildSupportGroupIntroText(locale),
+      buildSupportGroupIntroText(locale, groups),
       buildSupportGroupIntroKeyboard()
     );
     return;
@@ -1609,12 +1610,19 @@ function buildPrivateHomeKeyboard(locale = "es") {
   };
 }
 
-function buildSupportGroupIntroText(locale = "es") {
+function buildSupportGroupIntroText(locale = "es", groups = []) {
+  const groupLines = groups.length
+    ? groups.map((group) => `- ${escapeHtml(group.chat_title || "Grupo sin nombre")}`)
+    : ["- Aun no tienes grupos detectados con esta cuenta."];
+
   return [
     "<b>CUSTOMER SERVICE GROUP</b>",
     "",
     "Desde aqui puedes agregar el bot al grupo donde responderan los administradores.",
-    "Primero agrega el bot y luego nombralo administrador dentro de ese grupo."
+    "Primero agrega el bot y luego nombralo administrador dentro de ese grupo.",
+    "",
+    "<b>Grupos detectados para tu cuenta:</b>",
+    ...groupLines
   ].join("\n");
 }
 
