@@ -71,7 +71,12 @@ const STRINGS = {
     ticket_support_from: "Usuario: {user}",
     ticket_support_group: "Grupo principal: {group}",
     ticket_support_message: "Consulta: {message}",
+    ticket_support_followup_title: "Seguimiento del ticket n° {number}",
     ticket_reply_sent: "Respuesta enviada al usuario.",
+    ticket_closed_inactive:
+      "El ticket n° {number} fue cerrado automaticamente por inactividad. Si necesitas mas ayuda, usa /ticket otra vez.",
+    ticket_support_closed_inactive:
+      "El ticket n° {number} fue cerrado automaticamente por 10 minutos de inactividad.",
     private_help_title: "Ayuda privada",
     private_help_body:
       "Usa el menu privado para editar:\n- Mensaje de bienvenida\n- Mensaje de advertencia\n- Reglas del sorteo\n- Texto principal del sorteo\n- Idioma del grupo",
@@ -170,6 +175,11 @@ const STRINGS = {
     panelbot_open_button: "Open bot admin",
     panelbot_open_text: "Open the private admin panel from this button:",
     rules_empty: "There are no rules configured yet.",
+    ticket_support_followup_title: "Follow-up for ticket #{number}",
+    ticket_closed_inactive:
+      "Ticket #{number} was closed automatically due to inactivity. If you still need help, use /ticket again.",
+    ticket_support_closed_inactive:
+      "Ticket #{number} was closed automatically after 10 minutes of inactivity.",
     staff_unavailable: "I could not read the staff list right now.",
     database_unavailable: "The database is unavailable right now.",
     raffle_db_unavailable: "The raffle database is unavailable right now.",

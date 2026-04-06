@@ -41,7 +41,10 @@ const {
   saveRaffleWinner,
   createSupportTicket,
   attachSupportTicketMessage,
-  getSupportTicketByReply
+  getSupportTicketByReply,
+  getOpenSupportTicketByUser,
+  updateSupportTicket,
+  closeSupportTicket
 } = require("./db");
 
 const app = express();
@@ -58,6 +61,8 @@ const ACTION_TO_FIELD = {
 };
 
 const spamTracker = new Map();
+const activeTicketTimers = new Map();
+const TICKET_INACTIVITY_MS = 10 * 60 * 1000;
 
 app.get("/", async (_req, res) => {
   const dbStatus = await testDbConnection();
@@ -417,6 +422,7 @@ async function handlePrivateText(message, text) {
 
   const state = await getUserState(from.id);
   if (!state) {
+    await handleOpenPrivateTicketContinuation(message, text);
     return;
   }
 
@@ -1335,15 +1341,58 @@ async function handlePrivateTicketMessage(message, text, state) {
     ].join("\n")
   );
 
+  let hydratedTicket = ticket;
   if (forwarded && forwarded.ok && forwarded.result && forwarded.result.message_id) {
-    await attachSupportTicketMessage(ticket.id, forwarded.result.message_id);
+    hydratedTicket = await attachSupportTicketMessage(ticket.id, forwarded.result.message_id);
   }
 
   await clearUserState(from.id);
+  scheduleTicketAutoClose(hydratedTicket || ticket);
   await sendMessage(
     message.chat.id,
     escapeHtml(tForLocale("es", "ticket_created", { number: ticket.ticket_number }))
   );
+}
+
+async function handleOpenPrivateTicketContinuation(message, text) {
+  const from = message.from || {};
+  const openTicket = await getOpenSupportTicketByUser(from.id);
+  if (!openTicket || openTicket.status !== "open") {
+    return;
+  }
+
+  const userLabel = from.username
+    ? `@${String(from.username).replace(/^@/, "")}`
+    : [from.first_name, from.last_name].filter(Boolean).join(" ") || String(from.id);
+
+  const forwarded = await sendMessage(
+    openTicket.support_chat_id,
+    [
+      `<b>${escapeHtml(tForLocale("es", "ticket_support_followup_title", { number: openTicket.ticket_number }))}</b>`,
+      escapeHtml(tForLocale("es", "ticket_support_from", { user: userLabel })),
+      "",
+      escapeHtml(text)
+    ].join("\n"),
+    openTicket.support_message_id
+      ? { reply_to_message_id: openTicket.support_message_id }
+      : {}
+  );
+
+  let updatedTicket = openTicket;
+  if (forwarded && forwarded.ok && forwarded.result && forwarded.result.message_id) {
+    updatedTicket = await updateSupportTicket(openTicket.id, {
+      support_message_id: forwarded.result.message_id,
+      message_text: text,
+      last_activity_at: new Date().toISOString()
+    });
+  } else {
+    updatedTicket = await updateSupportTicket(openTicket.id, {
+      message_text: text,
+      last_activity_at: new Date().toISOString()
+    });
+  }
+
+  scheduleTicketAutoClose(updatedTicket || openTicket);
 }
 
 async function handleSupportReply(chat, from, message) {
@@ -1369,8 +1418,58 @@ async function handleSupportReply(chat, from, message) {
     ].join("\n")
   ).catch(() => null);
 
+  const updatedTicket = await updateSupportTicket(ticket.id, {
+    last_activity_at: new Date().toISOString()
+  });
+  scheduleTicketAutoClose(updatedTicket || ticket);
   await sendMessage(chat.id, tForLocale("es", "ticket_reply_sent")).catch(() => null);
   return true;
+}
+
+function scheduleTicketAutoClose(ticket) {
+  if (!ticket || !ticket.id || ticket.status !== "open") {
+    return;
+  }
+
+  const existing = activeTicketTimers.get(ticket.id);
+  if (existing) {
+    clearTimeout(existing);
+  }
+
+  const lastActivityAt = ticket.last_activity_at || ticket.updated_at || ticket.created_at;
+  const elapsed = Math.max(0, Date.now() - new Date(lastActivityAt).getTime());
+  const waitMs = Math.max(1000, TICKET_INACTIVITY_MS - elapsed);
+
+  const timer = setTimeout(async () => {
+    activeTicketTimers.delete(ticket.id);
+    const fresh = await getOpenSupportTicketByUser(ticket.user_id);
+    if (!fresh || fresh.id !== ticket.id || fresh.status !== "open") {
+      return;
+    }
+
+    const freshLastActivity = fresh.last_activity_at || fresh.updated_at || fresh.created_at;
+    const idleFor = Date.now() - new Date(freshLastActivity).getTime();
+    if (idleFor < TICKET_INACTIVITY_MS) {
+      scheduleTicketAutoClose(fresh);
+      return;
+    }
+
+    const closed = await closeSupportTicket(ticket.id, "inactive");
+    await sendMessage(
+      fresh.user_id,
+      escapeHtml(tForLocale("es", "ticket_closed_inactive", { number: fresh.ticket_number }))
+    ).catch(() => null);
+    await sendMessage(
+      fresh.support_chat_id,
+      escapeHtml(tForLocale("es", "ticket_support_closed_inactive", { number: fresh.ticket_number }))
+    ).catch(() => null);
+
+    if (closed) {
+      activeTicketTimers.delete(closed.id);
+    }
+  }, waitMs);
+
+  activeTicketTimers.set(ticket.id, timer);
 }
 
 function formatAdminMention(item) {

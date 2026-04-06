@@ -575,6 +575,30 @@ async function getSupportTicketByReply(supportChatId, supportMessageId) {
   return null;
 }
 
+async function getOpenSupportTicketByUser(userId) {
+  if (useFirebase()) {
+    return firebaseStore.getOpenSupportTicketByUser(userId);
+  }
+
+  return null;
+}
+
+async function updateSupportTicket(ticketId, patch) {
+  if (useFirebase()) {
+    return firebaseStore.updateSupportTicket(ticketId, patch);
+  }
+
+  return null;
+}
+
+async function closeSupportTicket(ticketId, reason) {
+  if (useFirebase()) {
+    return firebaseStore.closeSupportTicket(ticketId, reason);
+  }
+
+  return null;
+}
+
 module.exports = {
   getPool,
   testDbConnection,
@@ -598,5 +622,8 @@ module.exports = {
   saveRaffleWinner,
   createSupportTicket,
   attachSupportTicketMessage,
-  getSupportTicketByReply
+  getSupportTicketByReply,
+  getOpenSupportTicketByUser,
+  updateSupportTicket,
+  closeSupportTicket
 };

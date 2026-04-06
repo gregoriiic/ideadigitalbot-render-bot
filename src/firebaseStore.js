@@ -474,6 +474,7 @@ async function createSupportTicket(mainChatId, supportChatId, user, messageText)
     message_text: messageText,
     support_message_id: null,
     status: "open",
+    last_activity_at: nowIso(),
     created_at: nowIso(),
     updated_at: nowIso()
   };
@@ -520,6 +521,57 @@ async function getSupportTicketByReply(supportChatId, supportMessageId) {
   return snap.docs[0].data();
 }
 
+async function getOpenSupportTicketByUser(userId) {
+  const db = getFirestore();
+  if (!db) {
+    return null;
+  }
+
+  const snap = await ticketsCollection()
+    .where("user_id", "==", userId)
+    .where("status", "==", "open")
+    .get();
+
+  if (snap.empty) {
+    return null;
+  }
+
+  return snap.docs
+    .map((doc) => doc.data())
+    .sort((left, right) => {
+      const a = new Date(left.updated_at || left.created_at || 0).getTime();
+      const b = new Date(right.updated_at || right.created_at || 0).getTime();
+      return b - a;
+    })[0] || null;
+}
+
+async function updateSupportTicket(ticketId, patch) {
+  const db = getFirestore();
+  if (!db) {
+    return null;
+  }
+
+  const ref = ticketsCollection().doc(String(ticketId));
+  await ref.set(
+    {
+      ...patch,
+      updated_at: nowIso()
+    },
+    { merge: true }
+  );
+
+  const snap = await ref.get();
+  return snap.exists ? snap.data() : null;
+}
+
+async function closeSupportTicket(ticketId, reason = "inactive") {
+  return updateSupportTicket(ticketId, {
+    status: "closed",
+    closed_reason: reason,
+    closed_at: nowIso()
+  });
+}
+
 module.exports = {
   hasFirebaseConfig,
   testConnection,
@@ -543,5 +595,8 @@ module.exports = {
   saveRaffleWinner,
   createSupportTicket,
   attachSupportTicketMessage,
-  getSupportTicketByReply
+  getSupportTicketByReply,
+  getOpenSupportTicketByUser,
+  updateSupportTicket,
+  closeSupportTicket
 };
