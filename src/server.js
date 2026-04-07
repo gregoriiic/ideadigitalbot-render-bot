@@ -2231,6 +2231,32 @@ async function maybeHandleAdvancedModeration(chat, from, message) {
   const settings = await ensureGroupSettings(chat.id, chat.title || "");
   const visibleText = extractVisibleMessageText(message);
 
+  if (violatesTopicsPolicy(settings, message)) {
+    await deleteMessage(chat.id, message.message_id).catch(() => null);
+    await sendMessage(
+      chat.id,
+      renderTemplate(settings.warning_message || "{first_name}, debes usar los temas permitidos del grupo.", {
+        first_name: from.first_name || tForSettings(settings, "user_fallback"),
+        username: from.username ? `@${from.username}` : from.first_name || tForSettings(settings, "user_fallback"),
+        group: chat.title || tForSettings(settings, "group_title_fallback")
+      })
+    );
+    return true;
+  }
+
+  if (violatesMemberPermissions(settings, message)) {
+    await deleteMessage(chat.id, message.message_id).catch(() => null);
+    await sendMessage(
+      chat.id,
+      renderTemplate(settings.warning_message || "{first_name}, ese tipo de contenido no esta permitido en este grupo.", {
+        first_name: from.first_name || tForSettings(settings, "user_fallback"),
+        username: from.username ? `@${from.username}` : from.first_name || tForSettings(settings, "user_fallback"),
+        group: chat.title || tForSettings(settings, "group_title_fallback")
+      })
+    );
+    return true;
+  }
+
   if (shouldBlockMaskedUser(settings, message)) {
     await deleteMessage(chat.id, message.message_id).catch(() => null);
     await sendMessage(
@@ -3008,6 +3034,103 @@ function normalizeSpamText(text) {
     .toLowerCase()
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function parseBooleanRule(source, aliases = []) {
+  const value = String(source || "").toLowerCase();
+  for (const alias of aliases) {
+    const normalized = String(alias || "").toLowerCase();
+    if (!normalized) {
+      continue;
+    }
+
+    if (new RegExp(`${normalized}\\s*[:=]?\\s*(si|sí|yes|on|true|permitido|permitida|allow)`, "i").test(value)) {
+      return true;
+    }
+
+    if (new RegExp(`${normalized}\\s*[:=]?\\s*(no|off|false|bloqueado|bloqueada|denegado|denegada|forbid)`, "i").test(value)) {
+      return false;
+    }
+  }
+
+  return null;
+}
+
+function getMessageContentType(message) {
+  if (message.photo) {
+    return "images";
+  }
+
+  if (message.video || message.video_note) {
+    return "videos";
+  }
+
+  if (message.audio || message.voice) {
+    return "audio";
+  }
+
+  if (message.document) {
+    return "documents";
+  }
+
+  if (message.animation) {
+    return "gifs";
+  }
+
+  if (message.sticker) {
+    return "stickers";
+  }
+
+  if (message.text) {
+    return "text";
+  }
+
+  return "";
+}
+
+function violatesTopicsPolicy(settings, message) {
+  const policy = String(settings.topics_policy || "").toLowerCase();
+  if (!policy) {
+    return false;
+  }
+
+  const onlyTopics = policy.includes("solo en temas") || policy.includes("only in topics") || policy.includes("requerir topics");
+  const blockTopics = policy.includes("sin temas") || policy.includes("bloquear temas") || policy.includes("block topics");
+
+  if (onlyTopics && !message.is_topic_message) {
+    return true;
+  }
+
+  if (blockTopics && message.is_topic_message) {
+    return true;
+  }
+
+  return false;
+}
+
+function violatesMemberPermissions(settings, message) {
+  const policy = String(settings.member_permissions_text || "").toLowerCase();
+  if (!policy) {
+    return false;
+  }
+
+  const type = getMessageContentType(message);
+  if (!type) {
+    return false;
+  }
+
+  const aliases = {
+    text: ["texto", "text", "mensajes"],
+    images: ["imagenes", "imágenes", "fotos", "images", "photos"],
+    videos: ["videos", "video", "video circular"],
+    audio: ["audios", "audio", "voz", "voice", "nota de voz"],
+    documents: ["documentos", "document", "files", "archivos"],
+    gifs: ["gifs", "gif", "animaciones", "animations"],
+    stickers: ["stickers", "sticker"]
+  };
+
+  const rule = parseBooleanRule(policy, aliases[type] || []);
+  return rule === false;
 }
 
 function parseBannedWords(value) {
