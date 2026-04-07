@@ -24,8 +24,10 @@ const {
 const {
   testDbConnection,
   listBotsByOwner,
+  listAllBots,
   registerBot,
   disconnectBot,
+  updateBotSubscription,
   getBotByWebhookKey,
   ensureSchema,
   listGroups,
@@ -52,7 +54,7 @@ const {
   updateSupportTicket,
   closeSupportTicket
 } = require("./db");
-const { runWithBot } = require("./botContext");
+const { runWithBot, currentBot } = require("./botContext");
 
 const app = express();
 app.use(express.json());
@@ -70,6 +72,41 @@ const ACTION_TO_FIELD = {
 const spamTracker = new Map();
 const activeTicketTimers = new Map();
 const TICKET_INACTIVITY_MS = 10 * 60 * 1000;
+
+function addMonthsIso(months = 1) {
+  const date = new Date();
+  date.setMonth(date.getMonth() + Number(months || 1));
+  return date.toISOString();
+}
+
+function isPremiumActive(bot = currentBot()) {
+  if (!bot || !bot.id || bot.id === "default") {
+    return true;
+  }
+
+  if (String(bot.status || "") !== "active") {
+    return false;
+  }
+
+  const premiumUntil = new Date(bot.premium_until || 0).getTime();
+  return String(bot.subscription_status || "inactive") === "active" && premiumUntil > Date.now();
+}
+
+function premiumBlockText() {
+  return [
+    "<b>Suscripcion inactiva</b>",
+    "",
+    "Las funciones premium de este bot estan desactivadas porque la suscripcion vencio o aun no fue activada.",
+    "Renueva el plan desde el panel web para seguir usando sorteos, tickets, bienvenida, staff y configuracion avanzada."
+  ].join("\n");
+}
+
+async function notifyPremiumBlocked(chatId, messageId = null) {
+  await sendMessage(chatId, premiumBlockText()).catch(() => null);
+  if (messageId) {
+    await answerCallbackQuery(messageId, "Suscripcion inactiva").catch(() => null);
+  }
+}
 
 async function resolvePanelBot(req) {
   const source = req.method === "GET" ? (req.query || {}) : (req.body || {});
@@ -273,6 +310,74 @@ app.get("/api/panel/bots", async (req, res) => {
   }
 });
 
+app.get("/api/panel/admin/subscriptions", async (req, res) => {
+  if (!isPanelTokenValid(req)) {
+    return res.status(403).json({ ok: false, message: "Invalid panel token." });
+  }
+
+  try {
+    const bots = await listAllBots();
+    return res.json({ ok: true, bots });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ ok: false, message: error.message });
+  }
+});
+
+app.post("/api/panel/admin/subscriptions/:botId", async (req, res) => {
+  if (!isPanelTokenValid(req)) {
+    return res.status(403).json({ ok: false, message: "Invalid panel token." });
+  }
+
+  try {
+    const botId = String(req.params.botId || "").trim();
+    const months = Math.max(1, Number((req.body || {}).months || 1));
+    const activatedBy = String((req.body || {}).activated_by || "owner").trim();
+
+    const bot = await updateBotSubscription(botId, {
+      subscription_status: "active",
+      premium_activated_at: new Date().toISOString(),
+      premium_until: addMonthsIso(months),
+      subscription_months: months,
+      subscription_updated_by: activatedBy
+    });
+
+    if (!bot) {
+      return res.status(404).json({ ok: false, message: "Bot not found." });
+    }
+
+    return res.json({ ok: true, bot });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ ok: false, message: error.message });
+  }
+});
+
+app.post("/api/panel/admin/subscriptions/:botId/deactivate", async (req, res) => {
+  if (!isPanelTokenValid(req)) {
+    return res.status(403).json({ ok: false, message: "Invalid panel token." });
+  }
+
+  try {
+    const botId = String(req.params.botId || "").trim();
+    const activatedBy = String((req.body || {}).activated_by || "owner").trim();
+    const bot = await updateBotSubscription(botId, {
+      subscription_status: "inactive",
+      premium_until: null,
+      subscription_updated_by: activatedBy
+    });
+
+    if (!bot) {
+      return res.status(404).json({ ok: false, message: "Bot not found." });
+    }
+
+    return res.json({ ok: true, bot });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ ok: false, message: error.message });
+  }
+});
+
 app.post("/api/panel/bots/register", async (req, res) => {
   if (!isPanelTokenValid(req)) {
     return res.status(403).json({ ok: false, message: "Invalid panel token." });
@@ -457,6 +562,7 @@ async function handleMessage(message) {
   const chat = message.chat || {};
   const from = message.from || {};
   const text = (message.text || "").trim();
+  const premiumActive = isPremiumActive();
 
   if (chat.type === "private") {
     if (text) {
@@ -468,6 +574,19 @@ async function handleMessage(message) {
   }
 
   await ensureGroupSettings(chat.id, chat.title || "");
+
+  if (!premiumActive) {
+    if (text.startsWith("/")) {
+      const command = extractCommand(text);
+      if (command !== "/help") {
+        await sendMessage(chat.id, premiumBlockText()).catch(() => null);
+        await cleanupCommandMessage(message);
+        return;
+      }
+    } else {
+      return;
+    }
+  }
 
   if (Array.isArray(message.new_chat_members) && message.new_chat_members.length > 0) {
     await handleWelcomeMessage(chat, message.new_chat_members);
@@ -572,6 +691,7 @@ async function handlePrivateText(message, text) {
   const from = message.from || {};
   const chatId = message.chat.id;
   const command = extractCommand(text);
+  const premiumActive = isPremiumActive();
 
   if (command === "/start") {
     const startArg = text.split(/\s+/)[1] || "";
@@ -588,6 +708,11 @@ async function handlePrivateText(message, text) {
 
   if (command === "/help") {
     await sendMessage(chatId, buildPrivateHelpText("es"), buildPrivateHomeKeyboard("es"));
+    return;
+  }
+
+  if (!premiumActive) {
+    await sendMessage(chatId, premiumBlockText());
     return;
   }
 
@@ -692,6 +817,15 @@ async function handlePrivateManageStart(privateChatId, userId, targetChatId, pan
 
 async function handleCallbackQuery(callback) {
   const data = callback.data || "";
+
+  if (!isPremiumActive()) {
+    await answerCallbackQuery(callback.id, "Suscripcion inactiva").catch(() => null);
+    const privateChatId = callback.message && callback.message.chat ? callback.message.chat.id : null;
+    if (Number.isFinite(Number(privateChatId))) {
+      await sendMessage(Number(privateChatId), premiumBlockText()).catch(() => null);
+    }
+    return;
+  }
 
   if (data.indexOf("raffle_join:") === 0) {
     await handleRaffleJoin(callback);

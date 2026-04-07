@@ -112,6 +112,22 @@ async function listBotsByOwner(ownerKey) {
   return snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
 }
 
+async function listAllBots() {
+  const db = getFirestore();
+  if (!db) {
+    return [];
+  }
+
+  const snap = await botsCollection().get();
+  return snap.docs
+    .map((doc) => ({ id: doc.id, ...doc.data() }))
+    .sort((left, right) => {
+      const a = new Date(right.updated_at || right.created_at || 0).getTime();
+      const b = new Date(left.updated_at || left.created_at || 0).getTime();
+      return a - b;
+    });
+}
+
 async function registerBot(owner, input) {
   const db = getFirestore();
   if (!db) {
@@ -147,6 +163,15 @@ async function registerBot(owner, input) {
     bot_token: token,
     webhook_key: webhookKey,
     status: "active",
+    subscription_status: existing.empty
+      ? "inactive"
+      : String((existing.docs[0].data() || {}).subscription_status || "inactive"),
+    premium_activated_at: existing.empty
+      ? null
+      : ((existing.docs[0].data() || {}).premium_activated_at || null),
+    premium_until: existing.empty
+      ? null
+      : ((existing.docs[0].data() || {}).premium_until || null),
     updated_at: nowIso(),
     created_at: existing.empty ? nowIso() : ((existing.docs[0].data() || {}).created_at || nowIso())
   };
@@ -183,6 +208,30 @@ async function disconnectBot(ownerKey, botId) {
   );
 
   return true;
+}
+
+async function updateBotSubscription(botId, patch) {
+  const db = getFirestore();
+  if (!db || !botId) {
+    return null;
+  }
+
+  const ref = botsCollection().doc(String(botId));
+  const snap = await ref.get();
+  if (!snap.exists) {
+    return null;
+  }
+
+  await ref.set(
+    {
+      ...patch,
+      updated_at: nowIso()
+    },
+    { merge: true }
+  );
+
+  const updated = await ref.get();
+  return updated.exists ? { id: updated.id, ...updated.data() } : null;
 }
 
 async function getBotByWebhookKey(webhookKey) {
@@ -752,8 +801,10 @@ module.exports = {
   testConnection,
   ensureSchema,
   listBotsByOwner,
+  listAllBots,
   registerBot,
   disconnectBot,
+  updateBotSubscription,
   getBotByWebhookKey,
   listGroups,
   ensureGroupSettings,

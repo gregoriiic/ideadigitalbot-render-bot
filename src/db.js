@@ -70,6 +70,14 @@ async function listBotsByOwner(ownerKey) {
   return [];
 }
 
+async function listAllBots() {
+  if (useFirebase()) {
+    return firebaseStore.listAllBots();
+  }
+
+  return [];
+}
+
 async function registerBot(owner, input) {
   if (useFirebase()) {
     return firebaseStore.registerBot(owner, input);
@@ -84,6 +92,14 @@ async function disconnectBot(ownerKey, botId) {
   }
 
   return false;
+}
+
+async function updateBotSubscription(botId, patch) {
+  if (useFirebase()) {
+    return firebaseStore.updateBotSubscription(botId, patch);
+  }
+
+  return null;
 }
 
 async function getBotByWebhookKey(webhookKey) {
@@ -635,8 +651,10 @@ module.exports = {
   getPool,
   testDbConnection,
   listBotsByOwner,
+  listAllBots,
   registerBot,
   disconnectBot,
+  updateBotSubscription,
   getBotByWebhookKey,
   ensureSchema,
   listGroups,
