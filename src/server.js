@@ -66,10 +66,17 @@ const ACTION_TO_FIELD = {
   raffle_intro: "raffle_intro_text",
   language: "group_language",
   antispam_duration: "antispam_duration_text",
-  group_link_value: "group_link_value"
+  group_link_value: "group_link_value",
+  topics: "topics_policy",
+  banned_words: "banned_words_text",
+  repeated_messages: "repeated_messages_policy",
+  member_permissions: "member_permissions_text",
+  masked_users: "masked_users_policy",
+  custom_commands: "custom_commands_text"
 };
 
 const spamTracker = new Map();
+const repeatedMessageTracker = new Map();
 const activeTicketTimers = new Map();
 const TICKET_INACTIVITY_MS = 10 * 60 * 1000;
 
@@ -77,6 +84,19 @@ function addMonthsIso(months = 1) {
   const date = new Date();
   date.setMonth(date.getMonth() + Number(months || 1));
   return date.toISOString();
+}
+
+function formatPremiumDate(value) {
+  const parsed = new Date(value || "");
+  if (Number.isNaN(parsed.getTime())) {
+    return "No definida";
+  }
+
+  return parsed.toLocaleString("es-PE", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "America/Lima"
+  });
 }
 
 function isPremiumActive(bot = currentBot()) {
@@ -286,6 +306,30 @@ app.post("/api/panel/group/:chatId/settings", async (req, res) => {
         patch.group_link_value = body.group_link_value.trim();
       }
 
+      if (typeof body.topics_policy === "string") {
+        patch.topics_policy = body.topics_policy.trim();
+      }
+
+      if (typeof body.banned_words_text === "string") {
+        patch.banned_words_text = body.banned_words_text.trim();
+      }
+
+      if (typeof body.repeated_messages_policy === "string") {
+        patch.repeated_messages_policy = body.repeated_messages_policy.trim();
+      }
+
+      if (typeof body.member_permissions_text === "string") {
+        patch.member_permissions_text = body.member_permissions_text.trim();
+      }
+
+      if (typeof body.masked_users_policy === "string") {
+        patch.masked_users_policy = body.masked_users_policy.trim();
+      }
+
+      if (typeof body.custom_commands_text === "string") {
+        patch.custom_commands_text = body.custom_commands_text.trim();
+      }
+
       const settings = await updateGroupSettings(chatId, patch);
       return res.json({ ok: true, previous: current, settings, bot_id: bot ? bot.id : "default" });
     });
@@ -333,17 +377,31 @@ app.post("/api/panel/admin/subscriptions/:botId", async (req, res) => {
     const botId = String(req.params.botId || "").trim();
     const months = Math.max(1, Number((req.body || {}).months || 1));
     const activatedBy = String((req.body || {}).activated_by || "owner").trim();
+    const activatedAt = new Date().toISOString();
+    const premiumUntil = addMonthsIso(months);
 
     const bot = await updateBotSubscription(botId, {
       subscription_status: "active",
-      premium_activated_at: new Date().toISOString(),
-      premium_until: addMonthsIso(months),
+      premium_activated_at: activatedAt,
+      premium_until: premiumUntil,
       subscription_months: months,
       subscription_updated_by: activatedBy
     });
 
     if (!bot) {
       return res.status(404).json({ ok: false, message: "Bot not found." });
+    }
+
+    if (bot.owner_telegram_id && bot.bot_token) {
+      const premiumText = [
+        "<b>PREMIUM ACTIVADO</b>",
+        "",
+        `<b>Bot:</b> ${escapeHtml(bot.bot_name || bot.bot_username || "Bot clonado")}`,
+        `<b>Activado:</b> ${escapeHtml(formatPremiumDate(activatedAt))}`,
+        `<b>Vence:</b> ${escapeHtml(formatPremiumDate(premiumUntil))}`
+      ].join("\n");
+
+      await sendMessage(bot.owner_telegram_id, premiumText, {}, bot.bot_token).catch(() => null);
     }
 
     return res.json({ ok: true, bot });
@@ -601,6 +659,10 @@ async function handleMessage(message) {
   }
 
   if (!text.startsWith("/")) {
+    const moderated = await maybeHandleAdvancedModeration(chat, from, message);
+    if (moderated) {
+      return;
+    }
     await maybeHandleAntispam(chat, from, message);
     return;
   }
@@ -641,6 +703,12 @@ async function handleMessage(message) {
 
   if (command === "/ticket") {
     await handleTicketCommand(chat, from, message);
+    await cleanupCommandMessage(message);
+    return;
+  }
+
+  const customHandled = await handleCustomGroupCommand(chat, from, message, command);
+  if (customHandled) {
     await cleanupCommandMessage(message);
     return;
   }
@@ -1105,11 +1173,6 @@ async function handleConfigMenuCallback(callback) {
     return;
   }
 
-  if (page === "pending") {
-    await answerCallbackQuery(callback.id, "Disponible pronto");
-    return;
-  }
-
   if (page === "raffle") {
     await answerCallbackQuery(callback.id, tForSettings(settings, "preview_ready"));
     await editMessageText(
@@ -1139,6 +1202,17 @@ async function handleConfigMenuCallback(callback) {
       callback.message.message_id,
       buildGroupLinkConfigText(settings),
       buildGroupLinkConfigKeyboard(targetChatId, settings)
+    );
+    return;
+  }
+
+  if (page === "staff") {
+    await answerCallbackQuery(callback.id, tForSettings(settings, "preview_ready"));
+    await editMessageText(
+      privateChatId,
+      callback.message.message_id,
+      buildStaffConfigText(settings),
+      buildSimpleBackKeyboard(targetChatId)
     );
     return;
   }
@@ -1598,6 +1672,29 @@ async function handleGroupLinkCommand(chatId, chatTitle = "") {
   );
 }
 
+async function handleCustomGroupCommand(chat, from, message, command) {
+  const settings = await ensureGroupSettings(chat.id, chat.title || "");
+  const customCommand = findCustomCommand(settings.custom_commands_text, command);
+
+  if (!customCommand) {
+    return false;
+  }
+
+  if (customCommand.scope === "admin" && !(await isGroupAdmin(chat.id, from.id))) {
+    return true;
+  }
+
+  const rendered = renderTemplate(customCommand.reply, {
+    first_name: from.first_name || tForSettings(settings, "user_fallback"),
+    full_name: [from.first_name, from.last_name].filter(Boolean).join(" "),
+    username: from.username ? `@${from.username}` : from.first_name || tForSettings(settings, "user_fallback"),
+    group: chat.title || tForSettings(settings, "group_title_fallback")
+  });
+
+  await sendMessage(chat.id, rendered);
+  return true;
+}
+
 async function handleTicketCommand(chat, from, message) {
   const profile = await getUserProfile(from.id);
   const supportChatId = profile && Number.isFinite(Number(profile.support_group_chat_id))
@@ -2052,6 +2149,64 @@ async function maybeHandleAntispam(chat, from, message) {
   }
 }
 
+async function maybeHandleAdvancedModeration(chat, from, message) {
+  if (!from || !from.id || !message) {
+    return false;
+  }
+
+  if (await isGroupAdmin(chat.id, from.id)) {
+    return false;
+  }
+
+  const settings = await ensureGroupSettings(chat.id, chat.title || "");
+  const visibleText = extractVisibleMessageText(message);
+
+  if (shouldBlockMaskedUser(settings, message)) {
+    await deleteMessage(chat.id, message.message_id).catch(() => null);
+    await sendMessage(
+      chat.id,
+      renderTemplate(settings.warning_message || "{first_name}, esta accion no esta permitida en este grupo.", {
+        first_name: from.first_name || tForSettings(settings, "user_fallback"),
+        username: from.username ? `@${from.username}` : from.first_name || tForSettings(settings, "user_fallback"),
+        group: chat.title || tForSettings(settings, "group_title_fallback")
+      })
+    );
+    return true;
+  }
+
+  if (visibleText) {
+    const bannedWords = parseBannedWords(settings.banned_words_text);
+    if (bannedWords.length && containsBannedWord(visibleText, bannedWords)) {
+      await deleteMessage(chat.id, message.message_id).catch(() => null);
+      await sendMessage(
+        chat.id,
+        renderTemplate(settings.warning_message || "{first_name}, ese contenido no esta permitido en este grupo.", {
+          first_name: from.first_name || tForSettings(settings, "user_fallback"),
+          username: from.username ? `@${from.username}` : from.first_name || tForSettings(settings, "user_fallback"),
+          group: chat.title || tForSettings(settings, "group_title_fallback")
+        })
+      );
+      return true;
+    }
+
+    const repeatedThreshold = extractRepeatThreshold(settings.repeated_messages_policy);
+    if (repeatedThreshold > 1 && isRepeatedMessageBurst(chat.id, from.id, visibleText, repeatedThreshold)) {
+      await deleteMessage(chat.id, message.message_id).catch(() => null);
+      await sendMessage(
+        chat.id,
+        renderTemplate(settings.warning_message || "{first_name}, no repitas el mismo mensaje varias veces.", {
+          first_name: from.first_name || tForSettings(settings, "user_fallback"),
+          username: from.username ? `@${from.username}` : from.first_name || tForSettings(settings, "user_fallback"),
+          group: chat.title || tForSettings(settings, "group_title_fallback")
+        })
+      );
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function isMemberAdminStatus(status) {
   return status === "administrator" || status === "creator";
 }
@@ -2149,6 +2304,89 @@ function buildRaffleConfigText(settings) {
     `Grupo: <b>${escapeHtml(settings.chat_title || "Grupo sincronizado")}</b>`,
     "",
     "Desde aqui puedes editar el mensaje principal, las reglas y abrir la lista publica del sorteo."
+  ].join("\n");
+}
+
+function buildConfigCategoryKeyboard(chatId, settings, page = "main") {
+  if (page === "more") {
+    return {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "Temas / Topics", callback_data: `cfg:${chatId}:topics` }],
+          [{ text: "Palabras prohibidas", callback_data: `cfg:${chatId}:banned_words` }],
+          [{ text: "Mensajes recurrentes", callback_data: `cfg:${chatId}:repeated_messages` }],
+          [{ text: "Gestion de miembros", callback_data: `cfg:${chatId}:member_permissions` }],
+          [{ text: "Usuarios enmascarados", callback_data: `cfg:${chatId}:masked_users` }],
+          [{ text: "Comandos personales", callback_data: `cfg:${chatId}:custom_commands` }],
+          [
+            { text: "Volver", callback_data: `cfgmenu:main:${chatId}` },
+            { text: "Cerrar", callback_data: `cfgmenu:close:${chatId}` },
+            { text: "Lang", callback_data: `cfg:${chatId}:language` }
+          ]
+        ]
+      }
+    };
+  }
+
+  return {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: "Reglamento", callback_data: `cfg:${chatId}:rules` },
+          { text: "Antispam", callback_data: `cfgmenu:antispam:${chatId}` }
+        ],
+        [
+          { text: "Bienvenida", callback_data: `cfg:${chatId}:welcome` },
+          { text: "Anti-flood", callback_data: `cfg:${chatId}:repeated_messages` }
+        ],
+        [
+          { text: "Temas / Topics", callback_data: `cfg:${chatId}:topics` },
+          { text: "Filtros", callback_data: `cfg:${chatId}:banned_words` }
+        ],
+        [
+          { text: "Advertencias", callback_data: `cfg:${chatId}:warning` },
+          { text: "Sorteo", callback_data: `cfgmenu:raffle:${chatId}` }
+        ],
+        [
+          { text: "Staff", callback_data: `cfgmenu:staff:${chatId}` },
+          { text: "Enlace del grupo", callback_data: `cfgmenu:link:${chatId}` }
+        ],
+        [
+          { text: "Lang", callback_data: `cfg:${chatId}:language` },
+          { text: "Cerrar", callback_data: `cfgmenu:close:${chatId}` },
+          { text: "Mas", callback_data: `cfgmenu:more:${chatId}` }
+        ]
+      ]
+    }
+  };
+}
+
+function buildSimpleBackKeyboard(chatId) {
+  return {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: "Volver", callback_data: `cfgmenu:main:${chatId}` },
+          { text: "Cerrar", callback_data: `cfgmenu:close:${chatId}` }
+        ]
+      ]
+    }
+  };
+}
+
+function buildStaffConfigText(settings) {
+  return [
+    "<b>STAFF DEL GRUPO</b>",
+    `Grupo: <b>${escapeHtml(settings.chat_title || "Grupo sincronizado")}</b>`,
+    "",
+    "El comando /staff mencionara solo a los administradores del grupo.",
+    "",
+    "Rangos usados por el bot:",
+    "- Propietario: creator o admin con casi todos los permisos.",
+    "- Co-Lider: admin con varios permisos altos.",
+    "- Lider: resto de administradores activos.",
+    "",
+    "Los usuarios normales no se incluyen en /staff."
   ].join("\n");
 }
 
@@ -2553,6 +2791,91 @@ function buildConfigPreview(settings) {
   ].join("\n");
 }
 
+function buildEditPrompt(action, settings) {
+  const labels = {
+    welcome: tForSettings(settings, "prompt_welcome"),
+    warning: tForSettings(settings, "prompt_warning"),
+    rules: "Envia el nuevo reglamento del grupo.",
+    raffle_intro: tForSettings(settings, "prompt_raffle_intro"),
+    language: tForSettings(settings, "prompt_language"),
+    antispam_duration: "Envia la duracion del mute. Ejemplo: 1 d 24 h 17 m",
+    group_link_value: "Envia el enlace del grupo. Ejemplo: https://t.me/tu_grupo",
+    topics: tForSettings(settings, "prompt_topics"),
+    banned_words: tForSettings(settings, "prompt_banned_words"),
+    repeated_messages: tForSettings(settings, "prompt_repeated_messages"),
+    member_permissions: tForSettings(settings, "prompt_member_permissions"),
+    masked_users: tForSettings(settings, "prompt_masked_users"),
+    custom_commands: tForSettings(settings, "prompt_custom_commands")
+  };
+
+  const currentValue = {
+    welcome: settings.welcome_message,
+    warning: settings.warning_message,
+    rules: settings.group_rules_text,
+    raffle_intro: settings.raffle_intro_text,
+    language: `${getGroupLocale(settings).toUpperCase()} - ${getLocaleLabel(getGroupLocale(settings))}`,
+    antispam_duration: settings.antispam_duration_text || "24 h",
+    group_link_value: settings.group_link_value || "Sin enlace configurado.",
+    topics: settings.topics_policy || "",
+    banned_words: settings.banned_words_text || "",
+    repeated_messages: settings.repeated_messages_policy || "",
+    member_permissions: settings.member_permissions_text || "",
+    masked_users: settings.masked_users_policy || "",
+    custom_commands: settings.custom_commands_text || ""
+  };
+
+  return [
+    labels[action] || "Send the new content.",
+    "",
+    `<b>${escapeHtml(tForSettings(settings, "current_value"))}</b>`,
+    escapeHtml(currentValue[action] || "(empty)"),
+    "",
+    action === "language" ? "" : escapeHtml(tForSettings(settings, "placeholders"))
+  ].join("\n");
+}
+
+function buildConfigItemPreview(action, settings) {
+  const labels = {
+    welcome: tForSettings(settings, "preview_welcome"),
+    warning: tForSettings(settings, "preview_warning"),
+    rules: tForSettings(settings, "preview_rules"),
+    raffle_intro: tForSettings(settings, "preview_raffle_text"),
+    language: tForSettings(settings, "preview_language"),
+    antispam_duration: "Duracion del antispam",
+    group_link_value: "Enlace del grupo",
+    topics: tForSettings(settings, "preview_topics"),
+    banned_words: tForSettings(settings, "preview_banned_words"),
+    repeated_messages: tForSettings(settings, "preview_repeated_messages"),
+    member_permissions: tForSettings(settings, "preview_member_permissions"),
+    masked_users: tForSettings(settings, "preview_masked_users"),
+    custom_commands: tForSettings(settings, "preview_custom_commands")
+  };
+
+  const values = {
+    welcome: settings.welcome_message || "",
+    warning: settings.warning_message || "",
+    rules: settings.group_rules_text || "",
+    raffle_intro: settings.raffle_intro_text || "",
+    language: `${getGroupLocale(settings).toUpperCase()} - ${getLocaleLabel(getGroupLocale(settings))}`,
+    antispam_duration: settings.antispam_duration_text || "24 h",
+    group_link_value: settings.group_link_value || "Sin enlace configurado.",
+    topics: settings.topics_policy || "",
+    banned_words: settings.banned_words_text || "",
+    repeated_messages: settings.repeated_messages_policy || "",
+    member_permissions: settings.member_permissions_text || "",
+    masked_users: settings.masked_users_policy || "",
+    custom_commands: settings.custom_commands_text || ""
+  };
+
+  return [
+    `<b>${escapeHtml(labels[action] || action)}</b>`,
+    "",
+    escapeHtml(values[action] || ""),
+    "",
+    "Pulsa Editar si deseas cambiar este valor o Volver para regresar al menu."
+  ].join("\n");
+}
+
 function buildSettingPreview(action, value, settings = { group_language: "es" }) {
   const labels = {
     welcome: tForSettings(settings, "preview_welcome"),
@@ -2617,6 +2940,54 @@ function normalizeSpamText(text) {
     .trim();
 }
 
+function parseBannedWords(value) {
+  return String(value || "")
+    .split(/[\n,]+/)
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function containsBannedWord(text, bannedWords) {
+  const normalized = String(text || "").toLowerCase();
+  return bannedWords.some((word) => normalized.includes(word));
+}
+
+function extractRepeatThreshold(policyText) {
+  const match = String(policyText || "").match(/(\d+)/);
+  return match ? Math.max(0, Number(match[1] || 0)) : 0;
+}
+
+function isRepeatedMessageBurst(chatId, userId, text, threshold) {
+  const key = `${chatId}:${userId}`;
+  const now = Date.now();
+  const normalizedText = normalizeSpamText(text);
+  const previous = repeatedMessageTracker.get(key) || {
+    timestamps: [],
+    lastText: "",
+    sameTextCount: 0
+  };
+
+  const timestamps = [...previous.timestamps.filter((value) => now - value < 2 * 60 * 1000), now];
+  const sameTextCount = previous.lastText === normalizedText ? previous.sameTextCount + 1 : 1;
+
+  repeatedMessageTracker.set(key, {
+    timestamps,
+    lastText: normalizedText,
+    sameTextCount
+  });
+
+  return sameTextCount >= threshold;
+}
+
+function shouldBlockMaskedUser(settings, message) {
+  const policy = String(settings.masked_users_policy || "").toLowerCase();
+  if (!(policy.includes("bloque") || policy.includes("block"))) {
+    return false;
+  }
+
+  return Boolean(message.sender_chat && !message.is_automatic_forward);
+}
+
 function parseDurationToSeconds(value) {
   const input = String(value || "").toLowerCase();
   const parts = Array.from(input.matchAll(/(\d+)\s*([dhms])/g));
@@ -2659,6 +3030,31 @@ function formatAntispamAction(action) {
   }
 
   return "Advertir";
+}
+
+function parseCustomCommands(source) {
+  return String(source || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const match = line.match(/^\/([a-z0-9_]+)(?:\s*\|\s*(admin|all))?\s*[:=\-]\s*(.+)$/i);
+      if (!match) {
+        return null;
+      }
+
+      return {
+        command: `/${String(match[1]).toLowerCase()}`,
+        scope: String(match[2] || "all").toLowerCase(),
+        reply: String(match[3] || "").trim()
+      };
+    })
+    .filter(Boolean);
+}
+
+function findCustomCommand(source, command) {
+  const target = String(command || "").toLowerCase();
+  return parseCustomCommands(source).find((item) => item.command === target) || null;
 }
 
 async function editPanelMessage(chatId, messageId, text, replyMarkup) {
