@@ -678,8 +678,21 @@ async function handleMessage(message) {
 
   await ensureGroupSettings(chat.id, chat.title || "");
 
+  if (await cleanupServiceActionMessage(message)) {
+    if (
+      !Array.isArray(message.new_chat_members) &&
+      !message.left_chat_member
+    ) {
+      return;
+    }
+  }
+
   if (Array.isArray(message.new_chat_members) && message.new_chat_members.length > 0) {
     await handleWelcomeMessage(chat, message.new_chat_members);
+    return;
+  }
+
+  if (message.left_chat_member) {
     return;
   }
 
@@ -2159,6 +2172,51 @@ async function cleanupCommandMessage(message) {
   } catch (_error) {
     return;
   }
+}
+
+function isServiceActionMessage(message) {
+  if (!message || !message.chat || message.chat.type === "private") {
+    return false;
+  }
+
+  return Boolean(
+    (Array.isArray(message.new_chat_members) && message.new_chat_members.length > 0) ||
+    message.left_chat_member ||
+    message.new_chat_title ||
+    message.new_chat_photo ||
+    message.delete_chat_photo ||
+    message.group_chat_created ||
+    message.supergroup_chat_created ||
+    message.channel_chat_created ||
+    message.message_auto_delete_timer_changed ||
+    message.pinned_message ||
+    message.migrate_to_chat_id ||
+    message.migrate_from_chat_id ||
+    message.forum_topic_created ||
+    message.forum_topic_edited ||
+    message.forum_topic_closed ||
+    message.forum_topic_reopened ||
+    message.general_forum_topic_hidden ||
+    message.general_forum_topic_unhidden ||
+    message.write_access_allowed ||
+    message.users_shared ||
+    message.chat_shared
+  );
+}
+
+async function cleanupServiceActionMessage(message) {
+  if (!isServiceActionMessage(message)) {
+    return false;
+  }
+
+  const chat = message.chat || {};
+  const messageId = message.message_id;
+  if (!chat.id || !messageId) {
+    return false;
+  }
+
+  await deleteMessage(chat.id, messageId).catch(() => null);
+  return true;
 }
 
 async function maybeHandleAntispam(chat, from, message) {
