@@ -79,6 +79,15 @@ const spamTracker = new Map();
 const repeatedMessageTracker = new Map();
 const activeTicketTimers = new Map();
 const TICKET_INACTIVITY_MS = 10 * 60 * 1000;
+const FREE_CONFIG_ACTIONS = new Set([
+  "welcome",
+  "warning",
+  "rules",
+  "antispam_duration",
+  "group_link_value",
+  "banned_words",
+  "repeated_messages"
+]);
 
 function addMonthsIso(months = 1) {
   const date = new Date();
@@ -104,10 +113,6 @@ function isPremiumActive(bot = currentBot()) {
     return true;
   }
 
-  if (String(bot.status || "") !== "active") {
-    return false;
-  }
-
   const premiumUntil = new Date(bot.premium_until || 0).getTime();
   return String(bot.subscription_status || "inactive") === "active" && premiumUntil > Date.now();
 }
@@ -126,6 +131,42 @@ async function notifyPremiumBlocked(chatId, messageId = null) {
   if (messageId) {
     await answerCallbackQuery(messageId, "Suscripcion inactiva").catch(() => null);
   }
+}
+
+function isPremiumConfigAction(action) {
+  return !FREE_CONFIG_ACTIONS.has(String(action || ""));
+}
+
+function isPremiumCommand(command) {
+  return ["/ticket", "/nsorteo", "/sortear", "/reset"].includes(String(command || ""));
+}
+
+function isPremiumCallbackData(data) {
+  const value = String(data || "");
+
+  if (value.indexOf("raffle_join:") === 0 || value.indexOf("supportpick:") === 0 || value.indexOf("supportcfg:") === 0) {
+    return true;
+  }
+
+  if (value.indexOf("langpick:") === 0) {
+    return true;
+  }
+
+  if (value.indexOf("cfgmenu:raffle:") === 0) {
+    return true;
+  }
+
+  if (value.indexOf("cfgmenu:") === 0) {
+    return false;
+  }
+
+  if (value.indexOf("cfg:") === 0 || value.indexOf("cfgedit:") === 0) {
+    const parts = value.split(":");
+    const action = parts[2] || "";
+    return isPremiumConfigAction(action);
+  }
+
+  return false;
 }
 
 async function resolvePanelBot(req) {
@@ -626,32 +667,23 @@ async function handleMessage(message) {
     if (text) {
       await handlePrivateText(message, text);
     } else if (hasTicketRelayContent(message)) {
-      await handlePrivateNonText(message);
+      if (premiumActive) {
+        await handlePrivateNonText(message);
+      } else {
+        await sendMessage(chat.id, premiumBlockText()).catch(() => null);
+      }
     }
     return;
   }
 
   await ensureGroupSettings(chat.id, chat.title || "");
 
-  if (!premiumActive) {
-    if (text.startsWith("/")) {
-      const command = extractCommand(text);
-      if (command !== "/help") {
-        await sendMessage(chat.id, premiumBlockText()).catch(() => null);
-        await cleanupCommandMessage(message);
-        return;
-      }
-    } else {
-      return;
-    }
-  }
-
   if (Array.isArray(message.new_chat_members) && message.new_chat_members.length > 0) {
     await handleWelcomeMessage(chat, message.new_chat_members);
     return;
   }
 
-  if (message.reply_to_message && (!text || !text.startsWith("/"))) {
+  if (premiumActive && message.reply_to_message && (!text || !text.startsWith("/"))) {
     const replied = await handleSupportReply(chat, from, message);
     if (replied) {
       return;
@@ -702,9 +734,23 @@ async function handleMessage(message) {
   }
 
   if (command === "/ticket") {
+    if (!premiumActive) {
+      await sendMessage(chat.id, premiumBlockText()).catch(() => null);
+      await cleanupCommandMessage(message);
+      return;
+    }
     await handleTicketCommand(chat, from, message);
     await cleanupCommandMessage(message);
     return;
+  }
+
+  if (!premiumActive) {
+    const settings = await ensureGroupSettings(chat.id, chat.title || "");
+    if (findCustomCommand(settings.custom_commands_text, command)) {
+      await sendMessage(chat.id, premiumBlockText()).catch(() => null);
+      await cleanupCommandMessage(message);
+      return;
+    }
   }
 
   const customHandled = await handleCustomGroupCommand(chat, from, message, command);
@@ -718,18 +764,33 @@ async function handleMessage(message) {
   }
 
   if (command === "/nsorteo") {
+    if (!premiumActive) {
+      await sendMessage(chat.id, premiumBlockText()).catch(() => null);
+      await cleanupCommandMessage(message);
+      return;
+    }
     await handleNewRaffle(chat, from);
     await cleanupCommandMessage(message);
     return;
   }
 
   if (command === "/sortear") {
+    if (!premiumActive) {
+      await sendMessage(chat.id, premiumBlockText()).catch(() => null);
+      await cleanupCommandMessage(message);
+      return;
+    }
     await handleDrawWinner(chat.id, chat.title || "");
     await cleanupCommandMessage(message);
     return;
   }
 
   if (command === "/reset") {
+    if (!premiumActive) {
+      await sendMessage(chat.id, premiumBlockText()).catch(() => null);
+      await cleanupCommandMessage(message);
+      return;
+    }
     await handleResetRaffle(chat.id, chat.title || "");
     await cleanupCommandMessage(message);
     return;
@@ -779,11 +840,6 @@ async function handlePrivateText(message, text) {
     return;
   }
 
-  if (!premiumActive) {
-    await sendMessage(chatId, premiumBlockText());
-    return;
-  }
-
   if (command === "/settings" || command === "/panel" || command === "/panelbot") {
     await showPrivateGroups(chatId, from.id, "es");
     return;
@@ -791,11 +847,19 @@ async function handlePrivateText(message, text) {
 
   const state = await getUserState(from.id);
   if (!state) {
+    if (!premiumActive) {
+      await sendMessage(chatId, premiumBlockText());
+      return;
+    }
     await handleOpenPrivateTicketContinuation(message, text);
     return;
   }
 
   if (state.action_key === "await_ticket_message") {
+    if (!premiumActive) {
+      await sendMessage(chatId, premiumBlockText());
+      return;
+    }
     await handlePrivateTicketMessage(message, text, state);
     return;
   }
@@ -817,6 +881,12 @@ async function handlePrivateText(message, text) {
   }
 
   let updated;
+  if (!premiumActive && isPremiumConfigAction(actionKey)) {
+    await clearUserState(from.id);
+    await sendMessage(chatId, premiumBlockText());
+    return;
+  }
+
   if (actionKey === "language") {
     updated = await updateGroupSettings(targetChatId, {
       group_language: normalizeLocale(text)
@@ -886,7 +956,7 @@ async function handlePrivateManageStart(privateChatId, userId, targetChatId, pan
 async function handleCallbackQuery(callback) {
   const data = callback.data || "";
 
-  if (!isPremiumActive()) {
+  if (!isPremiumActive() && isPremiumCallbackData(data)) {
     await answerCallbackQuery(callback.id, "Suscripcion inactiva").catch(() => null);
     const privateChatId = callback.message && callback.message.chat ? callback.message.chat.id : null;
     if (Number.isFinite(Number(privateChatId))) {
@@ -2312,16 +2382,16 @@ function buildConfigCategoryKeyboard(chatId, settings, page = "main") {
     return {
       reply_markup: {
         inline_keyboard: [
-          [{ text: "Temas / Topics", callback_data: `cfg:${chatId}:topics` }],
-          [{ text: "Palabras prohibidas", callback_data: `cfg:${chatId}:banned_words` }],
-          [{ text: "Mensajes recurrentes", callback_data: `cfg:${chatId}:repeated_messages` }],
-          [{ text: "Gestion de miembros", callback_data: `cfg:${chatId}:member_permissions` }],
-          [{ text: "Usuarios enmascarados", callback_data: `cfg:${chatId}:masked_users` }],
-          [{ text: "Comandos personales", callback_data: `cfg:${chatId}:custom_commands` }],
+          [{ text: "📁 Temas / Topics", callback_data: `cfg:${chatId}:topics` }],
+          [{ text: "🔤 Palabras prohibidas", callback_data: `cfg:${chatId}:banned_words` }],
+          [{ text: "🕘 Mensajes recurrentes", callback_data: `cfg:${chatId}:repeated_messages` }],
+          [{ text: "👥 Gestion de miembros", callback_data: `cfg:${chatId}:member_permissions` }],
+          [{ text: "🫥 Usuarios enmascarados", callback_data: `cfg:${chatId}:masked_users` }],
+          [{ text: "📱 Comandos personales", callback_data: `cfg:${chatId}:custom_commands` }],
           [
-            { text: "Volver", callback_data: `cfgmenu:main:${chatId}` },
-            { text: "Cerrar", callback_data: `cfgmenu:close:${chatId}` },
-            { text: "Lang", callback_data: `cfg:${chatId}:language` }
+            { text: "◀️ Volver", callback_data: `cfgmenu:main:${chatId}` },
+            { text: "✅ Cerrar", callback_data: `cfgmenu:close:${chatId}` },
+            { text: "🌐 Lang", callback_data: `cfg:${chatId}:language` }
           ]
         ]
       }
@@ -2332,29 +2402,29 @@ function buildConfigCategoryKeyboard(chatId, settings, page = "main") {
     reply_markup: {
       inline_keyboard: [
         [
-          { text: "Reglamento", callback_data: `cfg:${chatId}:rules` },
-          { text: "Antispam", callback_data: `cfgmenu:antispam:${chatId}` }
+          { text: "📜 Reglamento", callback_data: `cfg:${chatId}:rules` },
+          { text: "🛡️ Antispam", callback_data: `cfgmenu:antispam:${chatId}` }
         ],
         [
-          { text: "Bienvenida", callback_data: `cfg:${chatId}:welcome` },
-          { text: "Anti-flood", callback_data: `cfg:${chatId}:repeated_messages` }
+          { text: "💬 Bienvenida", callback_data: `cfg:${chatId}:welcome` },
+          { text: "🌊 Anti-flood", callback_data: `cfg:${chatId}:repeated_messages` }
         ],
         [
-          { text: "Temas / Topics", callback_data: `cfg:${chatId}:topics` },
-          { text: "Filtros", callback_data: `cfg:${chatId}:banned_words` }
+          { text: "📁 Temas / Topics", callback_data: `cfg:${chatId}:topics` },
+          { text: "🧪 Filtros", callback_data: `cfg:${chatId}:banned_words` }
         ],
         [
-          { text: "Advertencias", callback_data: `cfg:${chatId}:warning` },
-          { text: "Sorteo", callback_data: `cfgmenu:raffle:${chatId}` }
+          { text: "🚨 Advertencias", callback_data: `cfg:${chatId}:warning` },
+          { text: "🎁 Sorteo", callback_data: `cfgmenu:raffle:${chatId}` }
         ],
         [
-          { text: "Staff", callback_data: `cfgmenu:staff:${chatId}` },
-          { text: "Enlace del grupo", callback_data: `cfgmenu:link:${chatId}` }
+          { text: "👥 Staff", callback_data: `cfgmenu:staff:${chatId}` },
+          { text: "🔗 Enlace del grupo", callback_data: `cfgmenu:link:${chatId}` }
         ],
         [
-          { text: "Lang", callback_data: `cfg:${chatId}:language` },
-          { text: "Cerrar", callback_data: `cfgmenu:close:${chatId}` },
-          { text: "Mas", callback_data: `cfgmenu:more:${chatId}` }
+          { text: "🌐 Lang", callback_data: `cfg:${chatId}:language` },
+          { text: "✅ Cerrar", callback_data: `cfgmenu:close:${chatId}` },
+          { text: "▶️ Mas", callback_data: `cfgmenu:more:${chatId}` }
         ]
       ]
     }
@@ -2366,8 +2436,8 @@ function buildSimpleBackKeyboard(chatId) {
     reply_markup: {
       inline_keyboard: [
         [
-          { text: "Volver", callback_data: `cfgmenu:main:${chatId}` },
-          { text: "Cerrar", callback_data: `cfgmenu:close:${chatId}` }
+          { text: "◀️ Volver", callback_data: `cfgmenu:main:${chatId}` },
+          { text: "✅ Cerrar", callback_data: `cfgmenu:close:${chatId}` }
         ]
       ]
     }
