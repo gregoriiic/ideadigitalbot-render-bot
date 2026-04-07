@@ -62,6 +62,10 @@ function scopedGroupId(chatId) {
   return `${currentBotId()}:${chatId}`;
 }
 
+function scopedGroupPrefix() {
+  return `${currentBotId()}:`;
+}
+
 function groupDoc(chatId) {
   return getFirestore().collection("groups").doc(scopedGroupId(chatId));
 }
@@ -207,23 +211,72 @@ async function listGroups() {
   }
 
   try {
-    const snapshot = await db.collection("groups").get();
-    return snapshot.docs
-      .map((doc) => {
+    const prefix = scopedGroupPrefix();
+    const groupsRef = db.collection("groups");
+    const queries = [
+      groupsRef
+        .orderBy(admin.firestore.FieldPath.documentId())
+        .startAt(prefix)
+        .endAt(`${prefix}\uf8ff`)
+        .get()
+    ];
+
+    if (currentBotId() === "default") {
+      queries.push(groupsRef.get());
+    }
+
+    const snapshots = await Promise.all(queries);
+    const deduped = new Map();
+
+    snapshots.forEach((snapshot) => {
+      snapshot.docs.forEach((doc) => {
         const data = doc.data() || {};
-        return {
-          chat_id: Number(data.chat_id || doc.id),
+        const docId = String(doc.id || "");
+        const isScopedDoc = docId.startsWith(prefix);
+        const isLegacyDefaultDoc =
+          currentBotId() === "default" &&
+          docId.indexOf(":") === -1;
+
+        if (!isScopedDoc && !isLegacyDefaultDoc) {
+          return;
+        }
+
+        const chatId = Number(data.chat_id || (isLegacyDefaultDoc ? docId : ""));
+        if (!Number.isFinite(chatId)) {
+          return;
+        }
+
+        const candidate = {
+          chat_id: chatId,
           chat_title: String(data.chat_title || "").trim(),
           group_language: normalizeLocale(data.group_language || "es"),
           updated_at: data.updated_at || null
         };
-      })
-      .filter((group) => Number.isFinite(group.chat_id))
-      .sort((a, b) => {
-        const left = (a.chat_title || "").toLowerCase();
-        const right = (b.chat_title || "").toLowerCase();
-        return left.localeCompare(right);
+
+        const existing = deduped.get(chatId);
+        if (!existing) {
+          deduped.set(chatId, candidate);
+          return;
+        }
+
+        const existingTime = new Date(existing.updated_at || 0).getTime();
+        const candidateTime = new Date(candidate.updated_at || 0).getTime();
+
+        if (candidateTime >= existingTime) {
+          deduped.set(chatId, {
+            ...existing,
+            ...candidate,
+            chat_title: candidate.chat_title || existing.chat_title
+          });
+        }
       });
+    });
+
+    return Array.from(deduped.values()).sort((a, b) => {
+      const left = (a.chat_title || "").toLowerCase();
+      const right = (b.chat_title || "").toLowerCase();
+      return left.localeCompare(right);
+    });
   } catch (_error) {
     return [];
   }
