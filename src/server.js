@@ -61,6 +61,7 @@ app.use(express.json());
 
 const ACTION_TO_FIELD = {
   welcome: "welcome_message",
+  welcome_autodelete: "welcome_autodelete_text",
   warning: "warning_message",
   rules: "group_rules_text",
   raffle_intro: "raffle_intro_text",
@@ -79,9 +80,11 @@ const spamTracker = new Map();
 const repeatedMessageTracker = new Map();
 const activeTicketTimers = new Map();
 const activeWelcomeMessages = new Map();
+const activeWelcomeDeleteTimers = new Map();
 const TICKET_INACTIVITY_MS = 10 * 60 * 1000;
 const FREE_CONFIG_ACTIONS = new Set([
   "welcome",
+  "welcome_autodelete",
   "warning",
   "rules",
   "antispam_duration",
@@ -310,6 +313,10 @@ app.post("/api/panel/group/:chatId/settings", async (req, res) => {
 
       if (typeof body.welcome_message === "string") {
         patch.welcome_message = body.welcome_message.trim();
+      }
+
+      if (typeof body.welcome_autodelete_text === "string") {
+        patch.welcome_autodelete_text = body.welcome_autodelete_text.trim();
       }
 
       if (typeof body.warning_message === "string") {
@@ -2147,6 +2154,12 @@ async function handleWelcomeMessage(chat, newMembers) {
     await deleteMessage(chat.id, previousWelcomeId).catch(() => null);
   }
 
+  const previousTimer = activeWelcomeDeleteTimers.get(chat.id);
+  if (previousTimer) {
+    clearTimeout(previousTimer);
+    activeWelcomeDeleteTimers.delete(chat.id);
+  }
+
   const names = newMembers
     .map((user) => user.username ? `@${user.username}` : user.first_name || tForSettings(settings, "user_fallback"))
     .filter(Boolean);
@@ -2173,6 +2186,17 @@ async function handleWelcomeMessage(chat, newMembers) {
   const newMessageId = sent && sent.ok && sent.result ? sent.result.message_id : null;
   if (newMessageId) {
     activeWelcomeMessages.set(chat.id, newMessageId);
+    const deleteAfterSeconds = parseWelcomeDeleteSeconds(settings.welcome_autodelete_text);
+    if (deleteAfterSeconds > 0) {
+      const timer = setTimeout(async () => {
+        await deleteMessage(chat.id, newMessageId).catch(() => null);
+        if (activeWelcomeMessages.get(chat.id) === newMessageId) {
+          activeWelcomeMessages.delete(chat.id);
+        }
+        activeWelcomeDeleteTimers.delete(chat.id);
+      }, deleteAfterSeconds * 1000);
+      activeWelcomeDeleteTimers.set(chat.id, timer);
+    }
   } else {
     activeWelcomeMessages.delete(chat.id);
   }
@@ -2880,6 +2904,7 @@ function buildRaffleKeyboard(roundId, count, settings = { group_language: "es" }
 function buildEditPrompt(action, settings) {
   const labels = {
     welcome: tForSettings(settings, "prompt_welcome"),
+    welcome_autodelete: "Envia el tiempo para autodestruir la bienvenida. Ejemplo: 30 s, 5 m, 1 h. Escribe off para desactivarlo.",
     warning: tForSettings(settings, "prompt_warning"),
     rules: "Envia el nuevo reglamento del grupo.",
     raffle_intro: tForSettings(settings, "prompt_raffle_intro"),
@@ -2890,6 +2915,7 @@ function buildEditPrompt(action, settings) {
 
   const currentValue = {
     welcome: settings.welcome_message,
+    welcome_autodelete: settings.welcome_autodelete_text || "Desactivado",
     warning: settings.warning_message,
     rules: settings.group_rules_text,
     raffle_intro: settings.raffle_intro_text,
@@ -2910,6 +2936,7 @@ function buildEditPrompt(action, settings) {
 function buildConfigItemPreview(action, settings) {
   const labels = {
     welcome: tForSettings(settings, "preview_welcome"),
+    welcome_autodelete: "Autoeliminar bienvenida",
     warning: tForSettings(settings, "preview_warning"),
     rules: tForSettings(settings, "preview_rules"),
     raffle_intro: tForSettings(settings, "preview_raffle_text"),
@@ -2920,6 +2947,7 @@ function buildConfigItemPreview(action, settings) {
 
   const values = {
     welcome: settings.welcome_message || "",
+    welcome_autodelete: settings.welcome_autodelete_text || "Desactivado",
     warning: settings.warning_message || "",
     rules: settings.group_rules_text || "",
     raffle_intro: settings.raffle_intro_text || "",
@@ -2938,17 +2966,28 @@ function buildConfigItemPreview(action, settings) {
 }
 
 function buildConfigItemPreviewKeyboard(chatId, action) {
+  const rows = [];
+
+  if (action === "welcome") {
+    rows.push([
+      { text: "✏️ Editar", callback_data: `cfgedit:${chatId}:${action}` },
+      { text: "⏱️ Autoeliminar", callback_data: `cfgedit:${chatId}:welcome_autodelete` }
+    ]);
+  } else {
+    rows.push([
+      { text: "✏️ Editar", callback_data: `cfgedit:${chatId}:${action}` },
+      { text: "◀️ Volver", callback_data: `cfgmenu:main:${chatId}` }
+    ]);
+  }
+
+  rows.push([
+    { text: "◀️ Volver", callback_data: `cfgmenu:main:${chatId}` },
+    { text: "✅ Cerrar", callback_data: `cfgmenu:close:${chatId}` }
+  ]);
+
   return {
     reply_markup: {
-      inline_keyboard: [
-        [
-          { text: "✏️ Editar", callback_data: `cfgedit:${chatId}:${action}` },
-          { text: "◀️ Volver", callback_data: `cfgmenu:main:${chatId}` }
-        ],
-        [
-          { text: "✅ Cerrar", callback_data: `cfgmenu:close:${chatId}` }
-        ]
-      ]
+      inline_keyboard: rows
     }
   };
 }
@@ -3330,6 +3369,15 @@ function parseCustomCommands(source) {
 function findCustomCommand(source, command) {
   const target = String(command || "").toLowerCase();
   return parseCustomCommands(source).find((item) => item.command === target) || null;
+}
+
+function parseWelcomeDeleteSeconds(value) {
+  const input = String(value || "").trim().toLowerCase();
+  if (!input || input === "off" || input === "no" || input === "0") {
+    return 0;
+  }
+
+  return parseDurationToSeconds(input);
 }
 
 async function editPanelMessage(chatId, messageId, text, replyMarkup) {
