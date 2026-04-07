@@ -139,6 +139,22 @@ async function banChatMember(chatId, userId, explicitToken = "") {
   }, explicitToken);
 }
 
+async function setMyCommands(commands, scope = null, languageCode = "", explicitToken = "") {
+  const payload = {
+    commands: Array.isArray(commands) ? commands : []
+  };
+
+  if (scope) {
+    payload.scope = scope;
+  }
+
+  if (languageCode) {
+    payload.language_code = languageCode;
+  }
+
+  return telegramRequest("setMyCommands", payload, explicitToken);
+}
+
 module.exports = {
   sendMessage,
   editMessageText,
@@ -150,5 +166,6 @@ module.exports = {
   setWebhook,
   deleteWebhook,
   restrictChatMember,
-  banChatMember
+  banChatMember,
+  setMyCommands
 };

@@ -19,7 +19,8 @@ const {
   setWebhook,
   deleteWebhook,
   restrictChatMember,
-  banChatMember
+  banChatMember,
+  setMyCommands
 } = require("./telegram");
 const {
   testDbConnection,
@@ -81,7 +82,9 @@ const repeatedMessageTracker = new Map();
 const activeTicketTimers = new Map();
 const activeWelcomeMessages = new Map();
 const activeWelcomeDeleteTimers = new Map();
+const commandSyncTracker = new Map();
 const TICKET_INACTIVITY_MS = 10 * 60 * 1000;
+const COMMAND_SYNC_INTERVAL_MS = 10 * 60 * 1000;
 const FREE_CONFIG_ACTIONS = new Set([
   "welcome",
   "welcome_autodelete",
@@ -128,6 +131,114 @@ function premiumBlockText() {
     "Las funciones premium de este bot estan desactivadas porque la suscripcion vencio o aun no fue activada.",
     "Renueva el plan desde el panel web para seguir usando sorteos, tickets, bienvenida, staff y configuracion avanzada."
   ].join("\n");
+}
+
+function buildPrivateCommandMenu() {
+  return [
+    { command: "start", description: "Abrir panel privado del bot" },
+    { command: "panel", description: "Abrir selector de grupos" },
+    { command: "panelbot", description: "Abrir selector de grupos" },
+    { command: "settings", description: "Abrir configuracion privada" }
+  ];
+}
+
+function buildPublicGroupCommands(settings) {
+  const locale = getGroupLocale(settings);
+  if (locale === "en") {
+    return [
+      { command: "rules", description: "Show the group rules" },
+      { command: "staff", description: "Show the admin team" },
+      { command: "link", description: "Show the group link" },
+      { command: "ticket", description: "Open a support ticket" }
+    ];
+  }
+
+  return [
+    { command: "rules", description: "Ver el reglamento del grupo" },
+    { command: "staff", description: "Ver el staff del grupo" },
+    { command: "link", description: "Ver el enlace del grupo" },
+    { command: "ticket", description: "Abrir ticket de soporte" }
+  ];
+}
+
+function buildAdminGroupCommands(settings) {
+  const base = buildPublicGroupCommands(settings);
+  const locale = getGroupLocale(settings);
+
+  const adminOnly = locale === "en"
+    ? [
+        { command: "help", description: "Show available commands" },
+        { command: "panelbot", description: "Open the private admin panel" },
+        { command: "warn", description: "Warn the replied user" },
+        { command: "nsorteo", description: "Start a raffle message" },
+        { command: "sortear", description: "Pick a raffle winner" },
+        { command: "reset", description: "Reset raffle entries" },
+        { command: "announce", description: "Broadcast to main groups" }
+      ]
+    : [
+        { command: "help", description: "Ver los comandos disponibles" },
+        { command: "panelbot", description: "Abrir panel privado de admin" },
+        { command: "warn", description: "Advertir al usuario respondido" },
+        { command: "nsorteo", description: "Publicar un sorteo" },
+        { command: "sortear", description: "Elegir ganador del sorteo" },
+        { command: "reset", description: "Reiniciar el sorteo" },
+        { command: "announce", description: "Enviar anuncio a grupos" }
+      ];
+
+  return base.concat(adminOnly);
+}
+
+async function syncPrivateCommandMenu() {
+  const bot = currentBot();
+  const cacheKey = `${bot && bot.id ? bot.id : "default"}:private`;
+  const lastSyncedAt = Number(commandSyncTracker.get(cacheKey) || 0);
+
+  if (Date.now() - lastSyncedAt < COMMAND_SYNC_INTERVAL_MS) {
+    return;
+  }
+
+  const result = await setMyCommands(buildPrivateCommandMenu(), { type: "all_private_chats" }).catch(() => null);
+  if (result && result.ok) {
+    commandSyncTracker.set(cacheKey, Date.now());
+  }
+}
+
+async function syncGroupCommandMenus(chatId, settings) {
+  if (!Number.isFinite(Number(chatId))) {
+    return;
+  }
+
+  const bot = currentBot();
+  const botKey = bot && bot.id ? bot.id : "default";
+  const cacheKey = `${botKey}:group:${chatId}`;
+  const lastSyncedAt = Number(commandSyncTracker.get(cacheKey) || 0);
+
+  if (Date.now() - lastSyncedAt < COMMAND_SYNC_INTERVAL_MS) {
+    await syncPrivateCommandMenu();
+    return;
+  }
+
+  const publicCommands = buildPublicGroupCommands(settings);
+  const adminCommands = buildAdminGroupCommands(settings);
+  const groupScope = { type: "chat", chat_id: Number(chatId) };
+  const adminScope = { type: "chat_administrators", chat_id: Number(chatId) };
+
+  const results = await Promise.allSettled([
+    setMyCommands(publicCommands, groupScope),
+    setMyCommands(adminCommands, adminScope),
+    syncPrivateCommandMenu()
+  ]);
+
+  const ok = results[0].status === "fulfilled" &&
+    results[0].value &&
+    results[0].value.ok &&
+    results[1].status === "fulfilled" &&
+    results[1].value &&
+    results[1].value.ok;
+
+  if (ok) {
+    commandSyncTracker.set(cacheKey, Date.now());
+  }
 }
 
 async function notifyPremiumBlocked(chatId, messageId = null) {
@@ -672,6 +783,7 @@ async function handleMessage(message) {
   const premiumActive = isPremiumActive();
 
   if (chat.type === "private") {
+    await syncPrivateCommandMenu().catch(() => null);
     if (text) {
       await handlePrivateText(message, text);
     } else if (hasTicketRelayContent(message)) {
@@ -684,7 +796,8 @@ async function handleMessage(message) {
     return;
   }
 
-  await ensureGroupSettings(chat.id, chat.title || "");
+  const groupSettings = await ensureGroupSettings(chat.id, chat.title || "");
+  await syncGroupCommandMenus(chat.id, groupSettings).catch(() => null);
 
   if (await cleanupServiceActionMessage(message)) {
     if (
@@ -723,8 +836,7 @@ async function handleMessage(message) {
   const command = extractCommand(text);
 
   if (command === "/help") {
-    const settings = await ensureGroupSettings(chat.id, chat.title || "");
-    await sendMessage(chat.id, buildGroupHelpText(settings));
+    await sendMessage(chat.id, buildGroupHelpText(groupSettings));
     await cleanupCommandMessage(message);
     return;
   }
@@ -736,8 +848,7 @@ async function handleMessage(message) {
   }
 
   if (command === "/reglas" || command === "/rules") {
-    const settings = await ensureGroupSettings(chat.id, chat.title || "");
-    await sendMessage(chat.id, settings.group_rules_text || tForSettings(settings, "rules_empty"));
+    await sendMessage(chat.id, groupSettings.group_rules_text || tForSettings(groupSettings, "rules_empty"));
     await cleanupCommandMessage(message);
     return;
   }
@@ -778,8 +889,7 @@ async function handleMessage(message) {
   }
 
   if (!premiumActive) {
-    const settings = await ensureGroupSettings(chat.id, chat.title || "");
-    if (findCustomCommand(settings.custom_commands_text, command)) {
+    if (findCustomCommand(groupSettings.custom_commands_text, command)) {
       await sendMessage(chat.id, premiumBlockText()).catch(() => null);
       await cleanupCommandMessage(message);
       return;
