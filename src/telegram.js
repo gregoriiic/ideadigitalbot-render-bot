@@ -131,6 +131,29 @@ async function restrictChatMember(chatId, userId, untilDate, explicitToken = "")
   }, explicitToken);
 }
 
+async function allowChatMember(chatId, userId, explicitToken = "") {
+  return telegramRequest("restrictChatMember", {
+    chat_id: chatId,
+    user_id: userId,
+    permissions: {
+      can_send_messages: true,
+      can_send_audios: true,
+      can_send_documents: true,
+      can_send_photos: true,
+      can_send_videos: true,
+      can_send_video_notes: true,
+      can_send_voice_notes: true,
+      can_send_polls: true,
+      can_send_other_messages: true,
+      can_add_web_page_previews: true,
+      can_change_info: false,
+      can_invite_users: true,
+      can_pin_messages: false,
+      can_manage_topics: false
+    }
+  }, explicitToken);
+}
+
 async function banChatMember(chatId, userId, explicitToken = "") {
   return telegramRequest("banChatMember", {
     chat_id: chatId,
@@ -166,6 +189,7 @@ module.exports = {
   setWebhook,
   deleteWebhook,
   restrictChatMember,
+  allowChatMember,
   banChatMember,
   setMyCommands
 };

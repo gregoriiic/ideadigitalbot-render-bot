@@ -551,6 +551,8 @@ function getDefaultGroupSettings(locale = "es") {
     warn_limit_text: "3",
     warn_action: "mute",
     warn_duration_text: "24 h",
+    captcha_mode: "off",
+    captcha_timeout_text: "5 m",
     group_link_enabled: false,
     group_link_value: "",
     support_group_chat_id: null,

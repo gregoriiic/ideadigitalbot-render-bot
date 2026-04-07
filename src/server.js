@@ -19,6 +19,7 @@ const {
   setWebhook,
   deleteWebhook,
   restrictChatMember,
+  allowChatMember,
   banChatMember,
   setMyCommands
 } = require("./telegram");
@@ -79,7 +80,8 @@ const ACTION_TO_FIELD = {
   masked_users: "masked_users_policy",
   custom_commands: "custom_commands_text",
   warn_limit: "warn_limit_text",
-  warn_duration: "warn_duration_text"
+  warn_duration: "warn_duration_text",
+  captcha_timeout: "captcha_timeout_text"
 };
 
 const spamTracker = new Map();
@@ -88,6 +90,7 @@ const activeTicketTimers = new Map();
 const activeWelcomeMessages = new Map();
 const activeWelcomeDeleteTimers = new Map();
 const commandSyncTracker = new Map();
+const activeJoinChallenges = new Map();
 const TICKET_INACTIVITY_MS = 10 * 60 * 1000;
 const COMMAND_SYNC_INTERVAL_MS = 10 * 60 * 1000;
 const FREE_CONFIG_ACTIONS = new Set([
@@ -452,6 +455,14 @@ app.post("/api/panel/group/:chatId/settings", async (req, res) => {
 
       if (typeof body.warn_duration_text === "string") {
         patch.warn_duration_text = body.warn_duration_text.trim();
+      }
+
+      if (typeof body.captcha_mode === "string") {
+        patch.captcha_mode = body.captcha_mode.trim();
+      }
+
+      if (typeof body.captcha_timeout_text === "string") {
+        patch.captcha_timeout_text = body.captcha_timeout_text.trim();
       }
 
       if (typeof body.silent_actions_enabled === "boolean") {
@@ -841,7 +852,7 @@ async function handleMessage(message) {
   }
 
   if (Array.isArray(message.new_chat_members) && message.new_chat_members.length > 0) {
-    await handleWelcomeMessage(chat, message.new_chat_members);
+    await handleJoinGate(chat, message.new_chat_members);
     return;
   }
 
@@ -1180,6 +1191,11 @@ async function handleCallbackQuery(callback) {
     return;
   }
 
+  if (data.indexOf("captchacfg:") === 0) {
+    await handleCaptchaConfigCallback(callback);
+    return;
+  }
+
   if (data.indexOf("grouplink:") === 0) {
     await handleGroupLinkActionCallback(callback);
     return;
@@ -1192,6 +1208,21 @@ async function handleCallbackQuery(callback) {
 
   if (data.indexOf("logpick:") === 0) {
     await handleLogChannelPickCallback(callback);
+    return;
+  }
+
+  if (data.indexOf("verifyjoin:") === 0) {
+    await handleJoinVerificationCallback(callback);
+    return;
+  }
+
+  if (data.indexOf("approvejoin:") === 0) {
+    await handleJoinApprovalCallback(callback, true);
+    return;
+  }
+
+  if (data.indexOf("rejectjoin:") === 0) {
+    await handleJoinApprovalCallback(callback, false);
     return;
   }
 
@@ -1451,6 +1482,17 @@ async function handleConfigMenuCallback(callback) {
       callback.message.message_id,
       buildAntispamConfigText(settings),
       buildAntispamConfigKeyboard(targetChatId, settings)
+    );
+    return;
+  }
+
+  if (page === "captcha") {
+    await answerCallbackQuery(callback.id, tForSettings(settings, "preview_ready"));
+    await editMessageText(
+      privateChatId,
+      callback.message.message_id,
+      buildCaptchaConfigText(settings),
+      buildCaptchaConfigKeyboard(targetChatId, settings)
     );
     return;
   }
@@ -1869,6 +1911,133 @@ async function handleLogChannelPickCallback(callback) {
     buildLogChannelConfigText(updated),
     buildLogChannelConfigKeyboard(targetChatId, updated, groups)
   );
+}
+
+async function handleCaptchaConfigCallback(callback) {
+  const parts = String(callback.data || "").split(":");
+  const targetChatId = Number(parts[1]);
+  const action = parts[2] || "";
+  const privateChatId = callback.message.chat.id;
+  const userId = callback.from.id;
+  const settings = await ensureGroupSettings(targetChatId);
+
+  if (!(await isGroupAdmin(targetChatId, userId))) {
+    await answerCallbackQuery(callback.id, tForSettings(settings, "private_not_admin"));
+    return;
+  }
+
+  let updated = settings;
+
+  if (action === "cycle") {
+    const order = ["off", "captcha", "approval"];
+    const current = order.includes(settings.captcha_mode) ? settings.captcha_mode : "off";
+    const next = order[(order.indexOf(current) + 1) % order.length];
+    updated = await updateGroupSettings(targetChatId, {
+      captcha_mode: next
+    });
+  } else if (action === "timeout") {
+    await setUserState(userId, targetChatId, "captcha_timeout", callback.message.message_id);
+    await answerCallbackQuery(callback.id, tForSettings(settings, "send_new_text"));
+    await editMessageText(
+      privateChatId,
+      callback.message.message_id,
+      buildEditPrompt("captcha_timeout", settings),
+      {
+        reply_markup: {
+          inline_keyboard: [[
+            { text: "◀️ Volver", callback_data: `cfgmenu:captcha:${targetChatId}` },
+            { text: "✅ Cerrar", callback_data: `cfgmenu:close:${targetChatId}` }
+          ]]
+        }
+      }
+    );
+    return;
+  }
+
+  await answerCallbackQuery(callback.id, tForSettings(updated, "preview_ready"));
+  await editMessageText(
+    privateChatId,
+    callback.message.message_id,
+    buildCaptchaConfigText(updated),
+    buildCaptchaConfigKeyboard(targetChatId, updated)
+  );
+}
+
+async function handleJoinVerificationCallback(callback) {
+  const parts = String(callback.data || "").split(":");
+  const chatId = Number(parts[1]);
+  const userId = Number(parts[2]);
+  const key = `${chatId}:${userId}`;
+  const challenge = activeJoinChallenges.get(key);
+
+  if (!challenge || callback.from.id !== userId) {
+    await answerCallbackQuery(callback.id, "Esta verificacion no te pertenece.");
+    return;
+  }
+
+  clearTimeout(challenge.timer);
+  activeJoinChallenges.delete(key);
+  await allowChatMember(chatId, userId).catch(() => null);
+  await deleteMessage(chatId, challenge.promptMessageId).catch(() => null);
+  await answerCallbackQuery(callback.id, "Verificado");
+  await sendLogEvent(challenge.settings, "Captcha completado", [
+    `Grupo: <b>${escapeHtml(challenge.chatTitle)}</b>`,
+    `Usuario: <b>${escapeHtml(challenge.userLabel)}</b>`
+  ]);
+  await handleWelcomeMessage({ id: chatId, title: challenge.chatTitle }, [challenge.user]);
+}
+
+async function handleJoinApprovalCallback(callback, approved) {
+  const parts = String(callback.data || "").split(":");
+  const chatId = Number(parts[1]);
+  const userId = Number(parts[2]);
+  const key = `${chatId}:${userId}`;
+  const challenge = activeJoinChallenges.get(key);
+
+  if (!challenge) {
+    await answerCallbackQuery(callback.id, "Solicitud no disponible.");
+    return;
+  }
+
+  if (!(await isGroupAdmin(chatId, callback.from.id))) {
+    await answerCallbackQuery(callback.id, "Solo admins pueden responder.");
+    return;
+  }
+
+  clearTimeout(challenge.timer);
+  activeJoinChallenges.delete(key);
+
+  if (approved) {
+    await allowChatMember(chatId, userId).catch(() => null);
+    await answerCallbackQuery(callback.id, "Usuario aprobado");
+    await sendLogEvent(challenge.settings, "Usuario aprobado", [
+      `Grupo: <b>${escapeHtml(challenge.chatTitle)}</b>`,
+      `Usuario: <b>${escapeHtml(challenge.userLabel)}</b>`,
+      `Admin: <b>${escapeHtml(callback.from.username ? `@${callback.from.username}` : (callback.from.first_name || "admin"))}</b>`
+    ]);
+    await editMessageText(
+      chatId,
+      challenge.promptMessageId,
+      `<b>Aprobado</b>\n${escapeHtml(challenge.userLabel)} ya puede escribir en el grupo.`,
+      { reply_markup: { inline_keyboard: [] } }
+    ).catch(() => null);
+    await handleWelcomeMessage({ id: chatId, title: challenge.chatTitle }, [challenge.user]);
+    return;
+  }
+
+  await banChatMember(chatId, userId).catch(() => null);
+  await answerCallbackQuery(callback.id, "Usuario rechazado");
+  await sendLogEvent(challenge.settings, "Usuario rechazado", [
+    `Grupo: <b>${escapeHtml(challenge.chatTitle)}</b>`,
+    `Usuario: <b>${escapeHtml(challenge.userLabel)}</b>`,
+    `Admin: <b>${escapeHtml(callback.from.username ? `@${callback.from.username}` : (callback.from.first_name || "admin"))}</b>`
+  ]);
+  await editMessageText(
+    chatId,
+    challenge.promptMessageId,
+    `<b>Rechazado</b>\n${escapeHtml(challenge.userLabel)} fue retirado del grupo.`,
+    { reply_markup: { inline_keyboard: [] } }
+  ).catch(() => null);
 }
 
 async function handleRaffleJoin(callback) {
@@ -2896,7 +3065,7 @@ function buildConfigCategoryKeyboard(chatId, settings, page = "main") {
           { text: "🌊 Anti-flood", callback_data: `cfg:${chatId}:repeated_messages` }
         ],
         [
-          { text: "📁 Temas / Topics", callback_data: `cfg:${chatId}:topics` },
+          { text: "🧠 Captcha", callback_data: `cfgmenu:captcha:${chatId}` },
           { text: "🧪 Filtros", callback_data: `cfg:${chatId}:banned_words` }
         ],
         [
@@ -3086,6 +3255,48 @@ function buildLogChannelConfigKeyboard(chatId, settings, groups = []) {
   return {
     reply_markup: {
       inline_keyboard: rows
+    }
+  };
+}
+
+function formatCaptchaMode(mode) {
+  if (mode === "captcha") {
+    return "Captcha";
+  }
+
+  if (mode === "approval") {
+    return "Aprobacion manual";
+  }
+
+  return "Desactivado";
+}
+
+function buildCaptchaConfigText(settings) {
+  return [
+    "<b>CAPTCHA Y APROBACION</b>",
+    `Grupo: <b>${escapeHtml(settings.chat_title || "Grupo sincronizado")}</b>`,
+    "",
+    `Modo actual: <b>${escapeHtml(formatCaptchaMode(settings.captcha_mode))}</b>`,
+    `Tiempo limite: <b>${escapeHtml(settings.captcha_timeout_text || "5 m")}</b>`,
+    "",
+    "Captcha restringe al usuario hasta que pulse verificar.",
+    "Aprobacion manual espera a que un admin apruebe o rechace."
+  ].join("\n");
+}
+
+function buildCaptchaConfigKeyboard(chatId, settings) {
+  return {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: `🧠 ${formatCaptchaMode(settings.captcha_mode)}`, callback_data: `captchacfg:${chatId}:cycle` },
+          { text: `⏱️ ${settings.captcha_timeout_text || "5 m"}`, callback_data: `captchacfg:${chatId}:timeout` }
+        ],
+        [
+          { text: "◀️ Volver", callback_data: `cfgmenu:main:${chatId}` },
+          { text: "✅ Cerrar", callback_data: `cfgmenu:close:${chatId}` }
+        ]
+      ]
     }
   };
 }
@@ -3456,6 +3667,7 @@ function buildEditPrompt(action, settings) {
     raffle_intro: tForSettings(settings, "prompt_raffle_intro"),
     language: tForSettings(settings, "prompt_language"),
     antispam_duration: "Envia la duracion del mute. Ejemplo: 1 d 24 h 17 m",
+    captcha_timeout: "Envia el tiempo limite de validacion. Ejemplo: 5 m",
     group_link_value: "Envia el enlace del grupo. Ejemplo: https://t.me/tu_grupo",
     topics: tForSettings(settings, "prompt_topics"),
     banned_words: tForSettings(settings, "prompt_banned_words"),
@@ -3474,6 +3686,7 @@ function buildEditPrompt(action, settings) {
     raffle_intro: settings.raffle_intro_text,
     language: `${getGroupLocale(settings).toUpperCase()} - ${getLocaleLabel(getGroupLocale(settings))}`,
     antispam_duration: settings.antispam_duration_text || "24 h",
+    captcha_timeout: settings.captcha_timeout_text || "5 m",
     group_link_value: settings.group_link_value || "Sin enlace configurado.",
     topics: settings.topics_policy || "",
     banned_words: settings.banned_words_text || "",
@@ -3503,6 +3716,7 @@ function buildConfigItemPreview(action, settings) {
     raffle_intro: tForSettings(settings, "preview_raffle_text"),
     language: tForSettings(settings, "preview_language"),
     antispam_duration: "Duracion del antispam",
+    captcha_timeout: "Tiempo limite de validacion",
     group_link_value: "Enlace del grupo",
     topics: tForSettings(settings, "preview_topics"),
     banned_words: tForSettings(settings, "preview_banned_words"),
@@ -3521,6 +3735,7 @@ function buildConfigItemPreview(action, settings) {
     raffle_intro: settings.raffle_intro_text || "",
     language: `${getGroupLocale(settings).toUpperCase()} - ${getLocaleLabel(getGroupLocale(settings))}`,
     antispam_duration: settings.antispam_duration_text || "24 h",
+    captcha_timeout: settings.captcha_timeout_text || "5 m",
     group_link_value: settings.group_link_value || "Sin enlace configurado.",
     topics: settings.topics_policy || "",
     banned_words: settings.banned_words_text || "",
@@ -3925,6 +4140,83 @@ function parseWelcomeDeleteSeconds(value) {
   }
 
   return parseDurationToSeconds(input);
+}
+
+function getCaptchaTimeoutSeconds(settings) {
+  return parseDurationToSeconds(settings.captcha_timeout_text || "5 m");
+}
+
+async function handleJoinGate(chat, newMembers) {
+  const settings = await ensureGroupSettings(chat.id, chat.title || "");
+  const mode = String(settings.captcha_mode || "off").toLowerCase();
+
+  if (mode !== "captcha" && mode !== "approval") {
+    await handleWelcomeMessage(chat, newMembers);
+    return;
+  }
+
+  const timeoutSeconds = Math.max(60, getCaptchaTimeoutSeconds(settings));
+
+  for (const user of newMembers) {
+    if (!user || !user.id || user.is_bot) {
+      continue;
+    }
+
+    const userLabel = user.username ? `@${user.username}` : (user.first_name || tForSettings(settings, "user_fallback"));
+    await restrictChatMember(chat.id, user.id, Math.floor(Date.now() / 1000) + timeoutSeconds).catch(() => null);
+
+    let promptText = "";
+    let keyboard = [];
+
+    if (mode === "captcha") {
+      promptText = `<b>Verificacion requerida</b>\n${escapeHtml(userLabel)}, pulsa el boton para activar tu acceso al grupo.`;
+      keyboard = [[{ text: "✅ Verificar acceso", callback_data: `verifyjoin:${chat.id}:${user.id}` }]];
+    } else {
+      promptText = `<b>Aprobacion pendiente</b>\n${escapeHtml(userLabel)} esta esperando la aprobacion de un administrador.`;
+      keyboard = [[
+        { text: "✅ Aprobar", callback_data: `approvejoin:${chat.id}:${user.id}` },
+        { text: "🚫 Rechazar", callback_data: `rejectjoin:${chat.id}:${user.id}` }
+      ]];
+    }
+
+    const sent = await sendMessage(chat.id, promptText, {
+      reply_markup: { inline_keyboard: keyboard }
+    }).catch(() => null);
+
+    const promptMessageId = sent && sent.ok && sent.result ? sent.result.message_id : null;
+    const key = `${chat.id}:${user.id}`;
+    const timer = setTimeout(async () => {
+      const current = activeJoinChallenges.get(key);
+      if (!current) {
+        return;
+      }
+
+      activeJoinChallenges.delete(key);
+      await banChatMember(chat.id, user.id).catch(() => null);
+      if (current.promptMessageId) {
+        await editMessageText(
+          chat.id,
+          current.promptMessageId,
+          `<b>Acceso vencido</b>\n${escapeHtml(current.userLabel)} no completo la validacion a tiempo.`,
+          { reply_markup: { inline_keyboard: [] } }
+        ).catch(() => null);
+      }
+      await sendLogEvent(settings, "Ingreso vencido", [
+        `Grupo: <b>${escapeHtml(chat.title || tForSettings(settings, "group_title_fallback"))}</b>`,
+        `Usuario: <b>${escapeHtml(current.userLabel)}</b>`,
+        `Modo: <b>${escapeHtml(formatCaptchaMode(mode))}</b>`
+      ]);
+    }, timeoutSeconds * 1000);
+
+    activeJoinChallenges.set(key, {
+      user,
+      userLabel,
+      chatTitle: chat.title || tForSettings(settings, "group_title_fallback"),
+      settings,
+      promptMessageId,
+      timer
+    });
+  }
 }
 
 async function editPanelMessage(chatId, messageId, text, replyMarkup) {
