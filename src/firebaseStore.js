@@ -90,6 +90,14 @@ function ticketsCollection() {
   return getFirestore().collection("tickets");
 }
 
+function warningsCollection(chatId) {
+  return groupDoc(chatId).collection("warnings");
+}
+
+function warningDoc(chatId, userId) {
+  return warningsCollection(chatId).doc(String(userId));
+}
+
 function botsCollection() {
   return getFirestore().collection("bots");
 }
@@ -796,6 +804,58 @@ async function closeSupportTicket(ticketId, reason = "inactive") {
   });
 }
 
+async function getUserWarnings(chatId, userId) {
+  const db = getFirestore();
+  if (!db) {
+    return { count: 0 };
+  }
+
+  const snap = await warningDoc(chatId, userId).get();
+  if (!snap.exists) {
+    return { count: 0 };
+  }
+
+  return snap.data() || { count: 0 };
+}
+
+async function incrementUserWarnings(chatId, user, reason = "manual") {
+  const db = getFirestore();
+  if (!db || !user || !user.id) {
+    return { count: 0 };
+  }
+
+  const ref = warningDoc(chatId, user.id);
+  const count = await db.runTransaction(async (transaction) => {
+    const snap = await transaction.get(ref);
+    const current = snap.exists ? Number((snap.data() || {}).count || 0) : 0;
+    const next = current + 1;
+
+    transaction.set(ref, {
+      user_id: user.id,
+      username: user.username || null,
+      first_name: user.first_name || null,
+      count: next,
+      last_reason: reason,
+      last_warned_at: nowIso(),
+      updated_at: nowIso()
+    }, { merge: true });
+
+    return next;
+  });
+
+  const snap = await ref.get();
+  return snap.exists ? snap.data() : { count };
+}
+
+async function resetUserWarnings(chatId, userId) {
+  const db = getFirestore();
+  if (!db || !userId) {
+    return;
+  }
+
+  await warningDoc(chatId, userId).delete().catch(() => null);
+}
+
 module.exports = {
   hasFirebaseConfig,
   testConnection,
@@ -828,5 +888,8 @@ module.exports = {
   getSupportTicketByReply,
   getOpenSupportTicketByUser,
   updateSupportTicket,
-  closeSupportTicket
+  closeSupportTicket,
+  getUserWarnings,
+  incrementUserWarnings,
+  resetUserWarnings
 };

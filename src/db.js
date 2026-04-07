@@ -647,6 +647,28 @@ async function closeSupportTicket(ticketId, reason) {
   return null;
 }
 
+async function getUserWarnings(chatId, userId) {
+  if (useFirebase()) {
+    return firebaseStore.getUserWarnings(chatId, userId);
+  }
+
+  return { count: 0 };
+}
+
+async function incrementUserWarnings(chatId, user, reason) {
+  if (useFirebase()) {
+    return firebaseStore.incrementUserWarnings(chatId, user, reason);
+  }
+
+  return { count: 0 };
+}
+
+async function resetUserWarnings(chatId, userId) {
+  if (useFirebase()) {
+    return firebaseStore.resetUserWarnings(chatId, userId);
+  }
+}
+
 module.exports = {
   getPool,
   testDbConnection,
@@ -679,5 +701,8 @@ module.exports = {
   getSupportTicketByReply,
   getOpenSupportTicketByUser,
   updateSupportTicket,
-  closeSupportTicket
+  closeSupportTicket,
+  getUserWarnings,
+  incrementUserWarnings,
+  resetUserWarnings
 };

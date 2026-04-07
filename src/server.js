@@ -53,7 +53,10 @@ const {
   getSupportTicketByReply,
   getOpenSupportTicketByUser,
   updateSupportTicket,
-  closeSupportTicket
+  closeSupportTicket,
+  getUserWarnings,
+  incrementUserWarnings,
+  resetUserWarnings
 } = require("./db");
 const { runWithBot, currentBot } = require("./botContext");
 
@@ -74,7 +77,9 @@ const ACTION_TO_FIELD = {
   repeated_messages: "repeated_messages_policy",
   member_permissions: "member_permissions_text",
   masked_users: "masked_users_policy",
-  custom_commands: "custom_commands_text"
+  custom_commands: "custom_commands_text",
+  warn_limit: "warn_limit_text",
+  warn_duration: "warn_duration_text"
 };
 
 const spamTracker = new Map();
@@ -89,11 +94,14 @@ const FREE_CONFIG_ACTIONS = new Set([
   "welcome",
   "welcome_autodelete",
   "warning",
+  "warn_limit",
+  "warn_duration",
   "rules",
   "antispam_duration",
   "group_link_value",
   "banned_words",
-  "repeated_messages"
+  "repeated_messages",
+  "log_channel_value"
 ]);
 
 function addMonthsIso(months = 1) {
@@ -432,6 +440,30 @@ app.post("/api/panel/group/:chatId/settings", async (req, res) => {
 
       if (typeof body.warning_message === "string") {
         patch.warning_message = body.warning_message.trim();
+      }
+
+      if (typeof body.warn_limit_text === "string") {
+        patch.warn_limit_text = body.warn_limit_text.trim();
+      }
+
+      if (typeof body.warn_action === "string") {
+        patch.warn_action = body.warn_action.trim();
+      }
+
+      if (typeof body.warn_duration_text === "string") {
+        patch.warn_duration_text = body.warn_duration_text.trim();
+      }
+
+      if (typeof body.silent_actions_enabled === "boolean") {
+        patch.silent_actions_enabled = body.silent_actions_enabled;
+      }
+
+      if (typeof body.log_channel_chat_id === "number" || body.log_channel_chat_id === null) {
+        patch.log_channel_chat_id = body.log_channel_chat_id;
+      }
+
+      if (typeof body.log_channel_title === "string") {
+        patch.log_channel_title = body.log_channel_title.trim();
       }
 
       if (typeof body.raffle_rules_text === "string") {
@@ -1143,8 +1175,23 @@ async function handleCallbackQuery(callback) {
     return;
   }
 
+  if (data.indexOf("warningcfg:") === 0) {
+    await handleWarningConfigCallback(callback);
+    return;
+  }
+
   if (data.indexOf("grouplink:") === 0) {
     await handleGroupLinkActionCallback(callback);
+    return;
+  }
+
+  if (data.indexOf("logcfg:") === 0) {
+    await handleLogChannelActionCallback(callback);
+    return;
+  }
+
+  if (data.indexOf("logpick:") === 0) {
+    await handleLogChannelPickCallback(callback);
     return;
   }
 
@@ -1408,6 +1455,17 @@ async function handleConfigMenuCallback(callback) {
     return;
   }
 
+  if (page === "warning") {
+    await answerCallbackQuery(callback.id, tForSettings(settings, "preview_ready"));
+    await editMessageText(
+      privateChatId,
+      callback.message.message_id,
+      buildWarningConfigText(settings),
+      buildWarningConfigKeyboard(targetChatId, settings)
+    );
+    return;
+  }
+
   if (page === "link") {
     await answerCallbackQuery(callback.id, tForSettings(settings, "preview_ready"));
     await editMessageText(
@@ -1415,6 +1473,18 @@ async function handleConfigMenuCallback(callback) {
       callback.message.message_id,
       buildGroupLinkConfigText(settings),
       buildGroupLinkConfigKeyboard(targetChatId, settings)
+    );
+    return;
+  }
+
+  if (page === "logs") {
+    const groups = await getManageableGroups(userId);
+    await answerCallbackQuery(callback.id, tForSettings(settings, "preview_ready"));
+    await editMessageText(
+      privateChatId,
+      callback.message.message_id,
+      buildLogChannelConfigText(settings),
+      buildLogChannelConfigKeyboard(targetChatId, settings, groups)
     );
     return;
   }
@@ -1662,6 +1732,145 @@ async function handleAntispamActionCallback(callback) {
   );
 }
 
+async function handleWarningConfigCallback(callback) {
+  const parts = String(callback.data || "").split(":");
+  const targetChatId = Number(parts[1]);
+  const action = parts[2] || "";
+  const privateChatId = callback.message.chat.id;
+  const userId = callback.from.id;
+  const settings = await ensureGroupSettings(targetChatId);
+
+  if (!(await isGroupAdmin(targetChatId, userId))) {
+    await answerCallbackQuery(callback.id, tForSettings(settings, "private_not_admin"));
+    return;
+  }
+
+  let updated = settings;
+
+  if (action === "silent") {
+    updated = await updateGroupSettings(targetChatId, {
+      silent_actions_enabled: !Boolean(settings.silent_actions_enabled)
+    });
+  } else if (action === "cycle") {
+    const order = ["warn", "mute", "kick"];
+    const current = order.includes(settings.warn_action) ? settings.warn_action : "mute";
+    const next = order[(order.indexOf(current) + 1) % order.length];
+    updated = await updateGroupSettings(targetChatId, {
+      warn_action: next
+    });
+  } else if (action === "limit") {
+    await setUserState(userId, targetChatId, "warn_limit", callback.message.message_id);
+    await answerCallbackQuery(callback.id, tForSettings(settings, "send_new_text"));
+    await editMessageText(
+      privateChatId,
+      callback.message.message_id,
+      buildEditPrompt("warn_limit", settings),
+      {
+        reply_markup: {
+          inline_keyboard: [[
+            { text: "◀️ Volver", callback_data: `cfgmenu:warning:${targetChatId}` },
+            { text: "✅ Cerrar", callback_data: `cfgmenu:close:${targetChatId}` }
+          ]]
+        }
+      }
+    );
+    return;
+  } else if (action === "duration") {
+    await setUserState(userId, targetChatId, "warn_duration", callback.message.message_id);
+    await answerCallbackQuery(callback.id, tForSettings(settings, "send_new_text"));
+    await editMessageText(
+      privateChatId,
+      callback.message.message_id,
+      buildEditPrompt("warn_duration", settings),
+      {
+        reply_markup: {
+          inline_keyboard: [[
+            { text: "◀️ Volver", callback_data: `cfgmenu:warning:${targetChatId}` },
+            { text: "✅ Cerrar", callback_data: `cfgmenu:close:${targetChatId}` }
+          ]]
+        }
+      }
+    );
+    return;
+  }
+
+  await answerCallbackQuery(callback.id, tForSettings(updated, "preview_ready"));
+  await editMessageText(
+    privateChatId,
+    callback.message.message_id,
+    buildWarningConfigText(updated),
+    buildWarningConfigKeyboard(targetChatId, updated)
+  );
+}
+
+async function handleLogChannelActionCallback(callback) {
+  const parts = String(callback.data || "").split(":");
+  const targetChatId = Number(parts[1]);
+  const action = parts[2] || "";
+  const privateChatId = callback.message.chat.id;
+  const userId = callback.from.id;
+  const settings = await ensureGroupSettings(targetChatId);
+
+  if (!(await isGroupAdmin(targetChatId, userId))) {
+    await answerCallbackQuery(callback.id, tForSettings(settings, "private_not_admin"));
+    return;
+  }
+
+  if (action === "disable") {
+    const updated = await updateGroupSettings(targetChatId, {
+      log_channel_chat_id: null,
+      log_channel_title: ""
+    });
+    const groups = await getManageableGroups(userId);
+    await answerCallbackQuery(callback.id, tForSettings(updated, "preview_ready"));
+    await editMessageText(
+      privateChatId,
+      callback.message.message_id,
+      buildLogChannelConfigText(updated),
+      buildLogChannelConfigKeyboard(targetChatId, updated, groups)
+    );
+    return;
+  }
+}
+
+async function handleLogChannelPickCallback(callback) {
+  const parts = String(callback.data || "").split(":");
+  const targetChatId = Number(parts[1]);
+  const pickedChatId = Number(parts[2]);
+  const privateChatId = callback.message.chat.id;
+  const userId = callback.from.id;
+  const settings = await ensureGroupSettings(targetChatId);
+
+  if (!(await isGroupAdmin(targetChatId, userId))) {
+    await answerCallbackQuery(callback.id, tForSettings(settings, "private_not_admin"));
+    return;
+  }
+
+  const groups = await getManageableGroups(userId);
+  const picked = groups.find((group) => Number(group.chat_id) === pickedChatId);
+  if (!picked) {
+    await answerCallbackQuery(callback.id, "Grupo no disponible");
+    return;
+  }
+
+  const updated = await updateGroupSettings(targetChatId, {
+    log_channel_chat_id: picked.chat_id,
+    log_channel_title: picked.chat_title || "Grupo sin nombre"
+  });
+
+  await answerCallbackQuery(callback.id, "Canal de logs configurado");
+  await sendMessage(
+    picked.chat_id,
+    `Canal de logs conectado para <b>${escapeHtml(updated.chat_title || "Grupo")}</b>.`
+  ).catch(() => null);
+  await editMessageText(
+    privateChatId,
+    callback.message.message_id,
+    buildLogChannelConfigText(updated),
+    buildLogChannelConfigKeyboard(targetChatId, updated, groups)
+  );
+}
+
 async function handleRaffleJoin(callback) {
   if (!(await isDatabaseAvailable())) {
     await answerCallbackQuery(callback.id, tForLocale("es", "database_unavailable"));
@@ -1831,13 +2040,7 @@ async function handleWarnCommand(chatId, chatTitle = "", message) {
   }
 
   const target = message.reply_to_message.from;
-  const rendered = renderTemplate(settings.warning_message, {
-    first_name: target.first_name || tForSettings(settings, "user_fallback"),
-    username: target.username ? `@${target.username}` : target.first_name || tForSettings(settings, "user_fallback"),
-    group: message.chat.title || tForSettings(settings, "group_title_fallback")
-  });
-
-  await sendMessage(chatId, rendered);
+  await issueGroupWarning(message.chat, settings, target, "Warn manual de administrador");
 }
 
 async function handleStaffCommand(chatId, chatTitle = "") {
@@ -2480,19 +2683,28 @@ async function maybeHandleAntispam(chat, from, message) {
   }
 
   await deleteMessage(chat.id, message.message_id).catch(() => null);
-  await sendMessage(
-    chat.id,
-    renderTemplate(settings.warning_message || "{first_name}, no se permite enviar spam en este grupo.", {
-      first_name: from.first_name || tForSettings(settings, "user_fallback"),
-      username: from.username ? `@${from.username}` : from.first_name || tForSettings(settings, "user_fallback"),
-      group: chat.title || tForSettings(settings, "group_title_fallback")
-    })
-  );
+  await sendLogEvent(settings, "Antispam detectado", [
+    `Grupo: <b>${escapeHtml(chat.title || tForSettings(settings, "group_title_fallback"))}</b>`,
+    `Usuario: <b>${escapeHtml(from.username ? `@${from.username}` : (from.first_name || tForSettings(settings, "user_fallback")))}</b>`,
+    "Se elimino un mensaje por spam o flood."
+  ]);
+
+  if (settings.antispam_action === "warn") {
+    await issueGroupWarning(chat, settings, from, "Antispam");
+    return;
+  }
 
   if (settings.antispam_action === "mute") {
     const durationSeconds = parseDurationToSeconds(settings.antispam_duration_text || "24 h");
     const untilDate = Math.floor(Date.now() / 1000) + durationSeconds;
     await restrictChatMember(chat.id, from.id, untilDate).catch(() => null);
+    if (!settings.silent_actions_enabled) {
+      await sendMessage(chat.id, renderTemplate(settings.warning_message || "{first_name}, no se permite enviar spam en este grupo.", {
+        first_name: from.first_name || tForSettings(settings, "user_fallback"),
+        username: from.username ? `@${from.username}` : from.first_name || tForSettings(settings, "user_fallback"),
+        group: chat.title || tForSettings(settings, "group_title_fallback")
+      })).catch(() => null);
+    }
     return;
   }
 
@@ -2515,40 +2727,19 @@ async function maybeHandleAdvancedModeration(chat, from, message) {
 
   if (violatesTopicsPolicy(settings, message)) {
     await deleteMessage(chat.id, message.message_id).catch(() => null);
-    await sendMessage(
-      chat.id,
-      renderTemplate(settings.warning_message || "{first_name}, debes usar los temas permitidos del grupo.", {
-        first_name: from.first_name || tForSettings(settings, "user_fallback"),
-        username: from.username ? `@${from.username}` : from.first_name || tForSettings(settings, "user_fallback"),
-        group: chat.title || tForSettings(settings, "group_title_fallback")
-      })
-    );
+    await issueGroupWarning(chat, settings, from, "Topics");
     return true;
   }
 
   if (violatesMemberPermissions(settings, message)) {
     await deleteMessage(chat.id, message.message_id).catch(() => null);
-    await sendMessage(
-      chat.id,
-      renderTemplate(settings.warning_message || "{first_name}, ese tipo de contenido no esta permitido en este grupo.", {
-        first_name: from.first_name || tForSettings(settings, "user_fallback"),
-        username: from.username ? `@${from.username}` : from.first_name || tForSettings(settings, "user_fallback"),
-        group: chat.title || tForSettings(settings, "group_title_fallback")
-      })
-    );
+    await issueGroupWarning(chat, settings, from, "Gestion de miembros");
     return true;
   }
 
   if (shouldBlockMaskedUser(settings, message)) {
     await deleteMessage(chat.id, message.message_id).catch(() => null);
-    await sendMessage(
-      chat.id,
-      renderTemplate(settings.warning_message || "{first_name}, esta accion no esta permitida en este grupo.", {
-        first_name: from.first_name || tForSettings(settings, "user_fallback"),
-        username: from.username ? `@${from.username}` : from.first_name || tForSettings(settings, "user_fallback"),
-        group: chat.title || tForSettings(settings, "group_title_fallback")
-      })
-    );
+    await issueGroupWarning(chat, settings, from, "Usuarios enmascarados");
     return true;
   }
 
@@ -2556,28 +2747,14 @@ async function maybeHandleAdvancedModeration(chat, from, message) {
     const bannedWords = parseBannedWords(settings.banned_words_text);
     if (bannedWords.length && containsBannedWord(visibleText, bannedWords)) {
       await deleteMessage(chat.id, message.message_id).catch(() => null);
-      await sendMessage(
-        chat.id,
-        renderTemplate(settings.warning_message || "{first_name}, ese contenido no esta permitido en este grupo.", {
-          first_name: from.first_name || tForSettings(settings, "user_fallback"),
-          username: from.username ? `@${from.username}` : from.first_name || tForSettings(settings, "user_fallback"),
-          group: chat.title || tForSettings(settings, "group_title_fallback")
-        })
-      );
+      await issueGroupWarning(chat, settings, from, "Palabras prohibidas");
       return true;
     }
 
     const repeatedThreshold = extractRepeatThreshold(settings.repeated_messages_policy);
     if (repeatedThreshold > 1 && isRepeatedMessageBurst(chat.id, from.id, visibleText, repeatedThreshold)) {
       await deleteMessage(chat.id, message.message_id).catch(() => null);
-      await sendMessage(
-        chat.id,
-        renderTemplate(settings.warning_message || "{first_name}, no repitas el mismo mensaje varias veces.", {
-          first_name: from.first_name || tForSettings(settings, "user_fallback"),
-          username: from.username ? `@${from.username}` : from.first_name || tForSettings(settings, "user_fallback"),
-          group: chat.title || tForSettings(settings, "group_title_fallback")
-        })
-      );
+      await issueGroupWarning(chat, settings, from, "Mensajes recurrentes");
       return true;
     }
   }
@@ -2696,6 +2873,7 @@ function buildConfigCategoryKeyboard(chatId, settings, page = "main") {
           [{ text: "👥 Gestion de miembros", callback_data: `cfg:${chatId}:member_permissions` }],
           [{ text: "🫥 Usuarios enmascarados", callback_data: `cfg:${chatId}:masked_users` }],
           [{ text: "📱 Comandos personales", callback_data: `cfg:${chatId}:custom_commands` }],
+          [{ text: "🧾 Canal de logs", callback_data: `cfgmenu:logs:${chatId}` }],
           [
             { text: "◀️ Volver", callback_data: `cfgmenu:main:${chatId}` },
             { text: "✅ Cerrar", callback_data: `cfgmenu:close:${chatId}` },
@@ -2722,7 +2900,7 @@ function buildConfigCategoryKeyboard(chatId, settings, page = "main") {
           { text: "🧪 Filtros", callback_data: `cfg:${chatId}:banned_words` }
         ],
         [
-          { text: "🚨 Advertencias", callback_data: `cfg:${chatId}:warning` },
+          { text: "🚨 Advertencias", callback_data: `cfgmenu:warning:${chatId}` },
           { text: "🎁 Sorteo", callback_data: `cfgmenu:raffle:${chatId}` }
         ],
         [
@@ -2829,6 +3007,85 @@ function buildAntispamConfigKeyboard(chatId, settings) {
           { text: "✅ Cerrar", callback_data: `cfgmenu:close:${chatId}` }
         ]
       ]
+    }
+  };
+}
+
+function buildWarningConfigText(settings) {
+  return [
+    "<b>CONFIGURACION DE ADVERTENCIAS</b>",
+    `Grupo: <b>${escapeHtml(settings.chat_title || "Grupo sincronizado")}</b>`,
+    "",
+    `Warns para sancion: <b>${getWarnLimit(settings)}</b>`,
+    `Accion al limite: <b>${escapeHtml(formatWarnAction(settings.warn_action))}</b>`,
+    `Duracion del mute: <b>${escapeHtml(settings.warn_duration_text || "24 h")}</b>`,
+    `Acciones silenciosas: <b>${settings.silent_actions_enabled ? "Activadas" : "Desactivadas"}</b>`,
+    `Canal de logs: <b>${escapeHtml(getLogChannelLabel(settings))}</b>`,
+    "",
+    "Aqui controlas el texto de advertencia, el limite acumulado y la sancion automatica."
+  ].join("\n");
+}
+
+function buildWarningConfigKeyboard(chatId, settings) {
+  return {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: "✏️ Editar mensaje", callback_data: `cfgedit:${chatId}:warning` },
+          { text: `🔢 Limite: ${getWarnLimit(settings)}`, callback_data: `warningcfg:${chatId}:limit` }
+        ],
+        [
+          { text: `⚖️ ${formatWarnAction(settings.warn_action)}`, callback_data: `warningcfg:${chatId}:cycle` },
+          { text: `⏱️ ${settings.warn_duration_text || "24 h"}`, callback_data: `warningcfg:${chatId}:duration` }
+        ],
+        [
+          {
+            text: settings.silent_actions_enabled ? "🤫 Desactivar silencioso" : "📢 Activar silencioso",
+            callback_data: `warningcfg:${chatId}:silent`
+          }
+        ],
+        [
+          { text: "🧾 Canal de logs", callback_data: `cfgmenu:logs:${chatId}` }
+        ],
+        [
+          { text: "◀️ Volver", callback_data: `cfgmenu:main:${chatId}` },
+          { text: "✅ Cerrar", callback_data: `cfgmenu:close:${chatId}` }
+        ]
+      ]
+    }
+  };
+}
+
+function buildLogChannelConfigText(settings) {
+  return [
+    "<b>CANAL DE LOGS</b>",
+    `Grupo: <b>${escapeHtml(settings.chat_title || "Grupo sincronizado")}</b>`,
+    "",
+    `Canal actual: <b>${escapeHtml(getLogChannelLabel(settings))}</b>`,
+    "",
+    "Elige el grupo donde quieres recibir warns, sanciones, tickets y acciones silenciosas."
+  ].join("\n");
+}
+
+function buildLogChannelConfigKeyboard(chatId, settings, groups = []) {
+  const choices = groups
+    .filter((group) => Number(group.chat_id) !== Number(chatId))
+    .slice(0, 8)
+    .map((group) => [{ text: `📌 ${group.chat_title || group.chat_id}`, callback_data: `logpick:${chatId}:${group.chat_id}` }]);
+
+  const rows = choices.concat([
+    [
+      { text: "🚫 Desconectar logs", callback_data: `logcfg:${chatId}:disable` }
+    ],
+    [
+      { text: "◀️ Volver", callback_data: `cfgmenu:warning:${chatId}` },
+      { text: "✅ Cerrar", callback_data: `cfgmenu:close:${chatId}` }
+    ]
+  ]);
+
+  return {
+    reply_markup: {
+      inline_keyboard: rows
     }
   };
 }
@@ -3149,6 +3406,11 @@ function buildConfigItemPreviewKeyboard(chatId, action) {
       { text: "✏️ Editar", callback_data: `cfgedit:${chatId}:${action}` },
       { text: "⏱️ Autoeliminar", callback_data: `cfgedit:${chatId}:welcome_autodelete` }
     ]);
+  } else if (action === "warning") {
+    rows.push([
+      { text: "✏️ Editar", callback_data: `cfgedit:${chatId}:${action}` },
+      { text: "◀️ Volver", callback_data: `cfgmenu:warning:${chatId}` }
+    ]);
   } else {
     rows.push([
       { text: "✏️ Editar", callback_data: `cfgedit:${chatId}:${action}` },
@@ -3188,6 +3450,8 @@ function buildEditPrompt(action, settings) {
   const labels = {
     welcome: tForSettings(settings, "prompt_welcome"),
     warning: tForSettings(settings, "prompt_warning"),
+    warn_limit: "Envia el numero de advertencias para sancionar automaticamente.",
+    warn_duration: "Envia la duracion del mute automatico. Ejemplo: 1 d 24 h 17 m",
     rules: "Envia el nuevo reglamento del grupo.",
     raffle_intro: tForSettings(settings, "prompt_raffle_intro"),
     language: tForSettings(settings, "prompt_language"),
@@ -3204,6 +3468,8 @@ function buildEditPrompt(action, settings) {
   const currentValue = {
     welcome: settings.welcome_message,
     warning: settings.warning_message,
+    warn_limit: String(getWarnLimit(settings)),
+    warn_duration: settings.warn_duration_text || "24 h",
     rules: settings.group_rules_text,
     raffle_intro: settings.raffle_intro_text,
     language: `${getGroupLocale(settings).toUpperCase()} - ${getLocaleLabel(getGroupLocale(settings))}`,
@@ -3231,6 +3497,8 @@ function buildConfigItemPreview(action, settings) {
   const labels = {
     welcome: tForSettings(settings, "preview_welcome"),
     warning: tForSettings(settings, "preview_warning"),
+    warn_limit: "Limite de advertencias",
+    warn_duration: "Duracion del mute automatico",
     rules: tForSettings(settings, "preview_rules"),
     raffle_intro: tForSettings(settings, "preview_raffle_text"),
     language: tForSettings(settings, "preview_language"),
@@ -3247,6 +3515,8 @@ function buildConfigItemPreview(action, settings) {
   const values = {
     welcome: settings.welcome_message || "",
     warning: settings.warning_message || "",
+    warn_limit: String(getWarnLimit(settings)),
+    warn_duration: settings.warn_duration_text || "24 h",
     rules: settings.group_rules_text || "",
     raffle_intro: settings.raffle_intro_text || "",
     language: `${getGroupLocale(settings).toUpperCase()} - ${getLocaleLabel(getGroupLocale(settings))}`,
@@ -3520,6 +3790,107 @@ function formatAntispamAction(action) {
   }
 
   return "Advertir";
+}
+
+function getWarnLimit(settings) {
+  const value = Number(String(settings.warn_limit_text || "3").match(/\d+/)?.[0] || 3);
+  return Math.max(1, value);
+}
+
+function formatWarnAction(action) {
+  if (action === "kick") {
+    return "Expulsar";
+  }
+
+  if (action === "mute") {
+    return "Silenciar";
+  }
+
+  return "Solo advertir";
+}
+
+function getLogChannelLabel(settings) {
+  return settings.log_channel_title || "No configurado";
+}
+
+async function sendLogEvent(settings, title, lines = []) {
+  const targetChatId = Number(settings.log_channel_chat_id || 0);
+  if (!Number.isFinite(targetChatId) || !targetChatId) {
+    return;
+  }
+
+  const payload = [
+    `<b>${escapeHtml(title)}</b>`,
+    ...lines.filter(Boolean).map((line) => String(line))
+  ].join("\n");
+
+  await sendMessage(targetChatId, payload).catch(() => null);
+}
+
+async function sendWarningNotice(chat, settings, renderedText) {
+  if (settings.silent_actions_enabled) {
+    return;
+  }
+
+  await sendMessage(chat.id, renderedText).catch(() => null);
+}
+
+async function applyWarnLimitPenalty(chat, settings, user, warningState, sourceLabel) {
+  const limit = getWarnLimit(settings);
+  const count = Number(warningState.count || 0);
+
+  if (count < limit) {
+    return false;
+  }
+
+  const action = String(settings.warn_action || "mute").toLowerCase();
+  const userLabel = user.username ? `@${user.username}` : (user.first_name || tForSettings(settings, "user_fallback"));
+  let penaltyLine = "Sin sancion automatica.";
+
+  if (action === "mute") {
+    const durationSeconds = parseDurationToSeconds(settings.warn_duration_text || "24 h");
+    const untilDate = Math.floor(Date.now() / 1000) + durationSeconds;
+    await restrictChatMember(chat.id, user.id, untilDate).catch(() => null);
+    penaltyLine = `Silenciado por ${escapeHtml(settings.warn_duration_text || "24 h")}.`;
+  } else if (action === "kick") {
+    await banChatMember(chat.id, user.id).catch(() => null);
+    penaltyLine = "Expulsado del grupo.";
+  }
+
+  await sendLogEvent(settings, "Sancion automatica", [
+    `Grupo: <b>${escapeHtml(chat.title || tForSettings(settings, "group_title_fallback"))}</b>`,
+    `Usuario: <b>${escapeHtml(userLabel)}</b>`,
+    `Motivo: <b>${escapeHtml(sourceLabel)}</b>`,
+    `Warns acumulados: <b>${count}/${limit}</b>`,
+    `Accion: <b>${escapeHtml(formatWarnAction(action))}</b>`,
+    penaltyLine
+  ]);
+
+  await resetUserWarnings(chat.id, user.id);
+  return true;
+}
+
+async function issueGroupWarning(chat, settings, user, sourceLabel) {
+  const warningState = await incrementUserWarnings(chat.id, user, sourceLabel);
+  const count = Number(warningState.count || 0);
+  const limit = getWarnLimit(settings);
+  const rendered = renderTemplate(settings.warning_message, {
+    first_name: user.first_name || tForSettings(settings, "user_fallback"),
+    username: user.username ? `@${user.username}` : user.first_name || tForSettings(settings, "user_fallback"),
+    group: chat.title || tForSettings(settings, "group_title_fallback")
+  });
+
+  await sendWarningNotice(chat, settings, `${rendered}\n\nWarns: <b>${count}/${limit}</b>`);
+
+  await sendLogEvent(settings, "Advertencia registrada", [
+    `Grupo: <b>${escapeHtml(chat.title || tForSettings(settings, "group_title_fallback"))}</b>`,
+    `Usuario: <b>${escapeHtml(user.username ? `@${user.username}` : (user.first_name || tForSettings(settings, "user_fallback")))}</b>`,
+    `Motivo: <b>${escapeHtml(sourceLabel)}</b>`,
+    `Warns: <b>${count}/${limit}</b>`
+  ]);
+
+  await applyWarnLimitPenalty(chat, settings, user, warningState, sourceLabel);
+  return warningState;
 }
 
 function parseCustomCommands(source) {
