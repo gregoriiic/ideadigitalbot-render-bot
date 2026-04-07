@@ -78,6 +78,7 @@ const ACTION_TO_FIELD = {
 const spamTracker = new Map();
 const repeatedMessageTracker = new Map();
 const activeTicketTimers = new Map();
+const activeWelcomeMessages = new Map();
 const TICKET_INACTIVITY_MS = 10 * 60 * 1000;
 const FREE_CONFIG_ACTIONS = new Set([
   "welcome",
@@ -2141,16 +2142,39 @@ async function handleWelcomeMessage(chat, newMembers) {
 
   const settings = await ensureGroupSettings(chat.id, chat.title || "");
   const template = settings.welcome_message || getDefaultGroupSettings(getGroupLocale(settings)).welcome_message;
+  const previousWelcomeId = activeWelcomeMessages.get(chat.id);
+  if (previousWelcomeId) {
+    await deleteMessage(chat.id, previousWelcomeId).catch(() => null);
+  }
 
-  for (const user of newMembers) {
-    const text = renderTemplate(template, {
-      first_name: user.first_name || tForSettings(settings, "user_fallback"),
-      full_name: [user.first_name, user.last_name].filter(Boolean).join(" "),
-      username: user.username ? `@${user.username}` : user.first_name || tForSettings(settings, "user_fallback"),
-      group: chat.title || tForSettings(settings, "group_title_fallback")
-    });
+  const names = newMembers
+    .map((user) => user.username ? `@${user.username}` : user.first_name || tForSettings(settings, "user_fallback"))
+    .filter(Boolean);
 
-    await sendMessage(chat.id, text);
+  const primaryUser = newMembers[0] || {};
+  const firstName = newMembers.length === 1
+    ? (primaryUser.first_name || tForSettings(settings, "user_fallback"))
+    : names.join(", ");
+  const fullName = newMembers.length === 1
+    ? [primaryUser.first_name, primaryUser.last_name].filter(Boolean).join(" ")
+    : names.join(", ");
+  const username = newMembers.length === 1
+    ? (primaryUser.username ? `@${primaryUser.username}` : primaryUser.first_name || tForSettings(settings, "user_fallback"))
+    : names.join(", ");
+
+  const text = renderTemplate(template, {
+    first_name: firstName,
+    full_name: fullName,
+    username,
+    group: chat.title || tForSettings(settings, "group_title_fallback")
+  });
+
+  const sent = await sendMessage(chat.id, text).catch(() => null);
+  const newMessageId = sent && sent.ok && sent.result ? sent.result.message_id : null;
+  if (newMessageId) {
+    activeWelcomeMessages.set(chat.id, newMessageId);
+  } else {
+    activeWelcomeMessages.delete(chat.id);
   }
 }
 
