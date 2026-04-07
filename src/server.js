@@ -765,6 +765,18 @@ async function handleMessage(message) {
     return;
   }
 
+  if (command === "/announce") {
+    if (!premiumActive) {
+      await sendMessage(chat.id, premiumBlockText()).catch(() => null);
+      await cleanupCommandMessage(message);
+      return;
+    }
+
+    await handleAnnounceCommand(chat, from, message, text);
+    await cleanupCommandMessage(message);
+    return;
+  }
+
   if (!premiumActive) {
     const settings = await ensureGroupSettings(chat.id, chat.title || "");
     if (findCustomCommand(settings.custom_commands_text, command)) {
@@ -1784,6 +1796,60 @@ async function handleCustomGroupCommand(chat, from, message, command) {
 
   await sendMessage(chat.id, rendered);
   return true;
+}
+
+async function handleAnnounceCommand(chat, from, message, text) {
+  if (!(await isGroupAdmin(chat.id, from.id))) {
+    return;
+  }
+
+  const profile = await getUserProfile(from.id);
+  const supportChatId = profile && Number.isFinite(Number(profile.support_group_chat_id))
+    ? Number(profile.support_group_chat_id)
+    : null;
+
+  if (!supportChatId || Number(chat.id) !== supportChatId) {
+    await sendMessage(chat.id, "Este comando solo puede usarse dentro del grupo configurado como customer service.").catch(() => null);
+    return;
+  }
+
+  const targets = (await getManageableGroups(from.id)).filter((group) => Number(group.chat_id) !== Number(chat.id));
+  if (!targets.length) {
+    await sendMessage(chat.id, "No se encontraron grupos principales para enviar el anuncio.").catch(() => null);
+    return;
+  }
+
+  const announcementText = String(text || "").replace(/^\/announce(@[^\s]+)?/i, "").trim();
+  let delivered = 0;
+
+  for (const group of targets) {
+    if (message.reply_to_message) {
+      const copied = await copyMessage(group.chat_id, chat.id, message.reply_to_message.message_id).catch(() => null);
+      if (copied && copied.ok) {
+        delivered += 1;
+      }
+      continue;
+    }
+
+    if (!announcementText) {
+      continue;
+    }
+
+    const sent = await sendMessage(group.chat_id, announcementText).catch(() => null);
+    if (sent && sent.ok) {
+      delivered += 1;
+    }
+  }
+
+  if (!message.reply_to_message && !announcementText) {
+    await sendMessage(
+      chat.id,
+      "Usa /announce seguido del texto, o responde a un mensaje con /announce para reenviarlo a todos los grupos principales."
+    ).catch(() => null);
+    return;
+  }
+
+  await sendMessage(chat.id, `Anuncio enviado a ${delivered} grupo(s).`).catch(() => null);
 }
 
 async function handleTicketCommand(chat, from, message) {
