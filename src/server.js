@@ -403,7 +403,21 @@ app.get("/api/panel/group/:chatId/settings", async (req, res) => {
       }
 
       const settings = await ensureGroupSettings(chatId);
-      return res.json({ ok: true, settings, bot_id: bot ? bot.id : "default" });
+      let mergedSettings = { ...settings };
+
+      if (bot && Number.isFinite(Number(bot.owner_telegram_id))) {
+        const profile = await getUserProfile(Number(bot.owner_telegram_id));
+        if (profile) {
+          if (!mergedSettings.support_group_chat_id && profile.support_group_chat_id) {
+            mergedSettings.support_group_chat_id = profile.support_group_chat_id;
+          }
+          if (!mergedSettings.support_group_title && profile.support_group_title) {
+            mergedSettings.support_group_title = profile.support_group_title;
+          }
+        }
+      }
+
+      return res.json({ ok: true, settings: mergedSettings, bot_id: bot ? bot.id : "default" });
     });
   } catch (error) {
     console.error(error);
