@@ -148,6 +148,18 @@ function premiumBlockText() {
   ].join("\n");
 }
 
+async function logGroupActivitySafe(chatId, type, title, summary) {
+  if (!Number.isFinite(Number(chatId))) {
+    return;
+  }
+
+  await appendGroupActivityLog(Number(chatId), {
+    type,
+    title,
+    summary
+  }).catch(() => null);
+}
+
 function buildPrivateCommandMenu() {
   return [
     { command: "start", description: "Abrir panel privado del bot" },
@@ -1154,10 +1166,12 @@ async function handlePrivateText(message, text) {
     updated = await updateGroupSettings(targetChatId, {
       group_language: normalizeLocale(text)
     });
+    await logGroupActivitySafe(targetChatId, "settings", "Idioma actualizado", `Nuevo idioma: ${updated.group_language || "es"}`);
   } else {
     updated = await updateGroupSettings(targetChatId, {
       [field]: text
     });
+    await logGroupActivitySafe(targetChatId, "settings", "Configuracion actualizada", `Campo editado: ${field}`);
   }
 
   await clearUserState(from.id);
@@ -1732,6 +1746,7 @@ async function handleLanguagePickCallback(callback) {
   const updated = await updateGroupSettings(targetChatId, {
     group_language: normalizeLocale(localeCode)
   });
+  await logGroupActivitySafe(targetChatId, "settings", "Idioma actualizado", `Nuevo idioma: ${updated.group_language || localeCode}`);
 
   await clearUserState(userId);
   await answerCallbackQuery(callback.id, tForSettings(updated, "preview_ready"));
@@ -1760,6 +1775,7 @@ async function handleGroupLinkActionCallback(callback) {
     const updated = await updateGroupSettings(targetChatId, {
       group_link_enabled: !Boolean(settings.group_link_enabled)
     });
+    await logGroupActivitySafe(targetChatId, "settings", "Enlace del grupo", `Estado: ${updated.group_link_enabled ? "activo" : "inactivo"}`);
 
     await answerCallbackQuery(callback.id, tForSettings(updated, "preview_ready"));
     await editMessageText(
@@ -1814,6 +1830,7 @@ async function handleAntispamActionCallback(callback) {
     updated = await updateGroupSettings(targetChatId, {
       antispam_enabled: !Boolean(settings.antispam_enabled)
     });
+    await logGroupActivitySafe(targetChatId, "settings", "Antispam", `Estado: ${updated.antispam_enabled ? "activo" : "inactivo"}`);
   } else if (action === "cycle") {
     const order = ["warn", "mute", "kick"];
     const current = order.includes(settings.antispam_action) ? settings.antispam_action : "warn";
@@ -1821,6 +1838,7 @@ async function handleAntispamActionCallback(callback) {
     updated = await updateGroupSettings(targetChatId, {
       antispam_action: next
     });
+    await logGroupActivitySafe(targetChatId, "settings", "Antispam", `Accion: ${next}`);
   } else if (action === "duration") {
     await setUserState(userId, targetChatId, "antispam_duration", callback.message.message_id);
     await answerCallbackQuery(callback.id, tForSettings(settings, "send_new_text"));
@@ -1870,6 +1888,7 @@ async function handleWarningConfigCallback(callback) {
     updated = await updateGroupSettings(targetChatId, {
       silent_actions_enabled: !Boolean(settings.silent_actions_enabled)
     });
+    await logGroupActivitySafe(targetChatId, "settings", "Acciones silenciosas", `Estado: ${updated.silent_actions_enabled ? "activadas" : "desactivadas"}`);
   } else if (action === "cycle") {
     const order = ["warn", "mute", "kick"];
     const current = order.includes(settings.warn_action) ? settings.warn_action : "mute";
@@ -1877,6 +1896,7 @@ async function handleWarningConfigCallback(callback) {
     updated = await updateGroupSettings(targetChatId, {
       warn_action: next
     });
+    await logGroupActivitySafe(targetChatId, "settings", "Advertencias", `Accion al limite: ${next}`);
   } else if (action === "limit") {
     await setUserState(userId, targetChatId, "warn_limit", callback.message.message_id);
     await answerCallbackQuery(callback.id, tForSettings(settings, "send_new_text"));
@@ -1940,6 +1960,7 @@ async function handleLogChannelActionCallback(callback) {
       log_channel_chat_id: null,
       log_channel_title: ""
     });
+    await logGroupActivitySafe(targetChatId, "settings", "Canal de logs", "Canal de logs desactivado");
     const groups = await getManageableGroups(userId);
     await answerCallbackQuery(callback.id, tForSettings(updated, "preview_ready"));
     await editMessageText(
@@ -1976,6 +1997,7 @@ async function handleLogChannelPickCallback(callback) {
     log_channel_chat_id: picked.chat_id,
     log_channel_title: picked.chat_title || "Grupo sin nombre"
   });
+  await logGroupActivitySafe(targetChatId, "settings", "Canal de logs", `Conectado: ${picked.chat_title || "Grupo sin nombre"}`);
 
   await answerCallbackQuery(callback.id, "Canal de logs configurado");
   await sendMessage(
@@ -2012,6 +2034,7 @@ async function handleCaptchaConfigCallback(callback) {
     updated = await updateGroupSettings(targetChatId, {
       captcha_mode: next
     });
+    await logGroupActivitySafe(targetChatId, "settings", "Modo de ingreso", `Captcha/aprobacion: ${next}`);
   } else if (action === "timeout") {
     await setUserState(userId, targetChatId, "captcha_timeout", callback.message.message_id);
     await answerCallbackQuery(callback.id, tForSettings(settings, "send_new_text"));
