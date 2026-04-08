@@ -83,6 +83,7 @@ const ACTION_TO_FIELD = {
   member_permissions: "member_permissions_text",
   masked_users: "masked_users_policy",
   custom_commands: "custom_commands_text",
+  translation_scope: "translation_scope",
   warn_limit: "warn_limit_text",
   warn_duration: "warn_duration_text",
   captcha_timeout: "captcha_timeout_text"
@@ -295,6 +296,10 @@ function isPremiumCallbackData(data) {
   }
 
   if (value.indexOf("cfgmenu:raffle:") === 0) {
+    return true;
+  }
+
+  if (value.indexOf("cfgmenu:translation:") === 0) {
     return true;
   }
 
@@ -561,6 +566,14 @@ app.post("/api/panel/group/:chatId/settings", async (req, res) => {
 
       if (typeof body.custom_commands_text === "string") {
         patch.custom_commands_text = body.custom_commands_text.trim();
+      }
+
+      if (typeof body.translation_enabled === "boolean") {
+        patch.translation_enabled = body.translation_enabled;
+      }
+
+      if (typeof body.translation_scope === "string") {
+        patch.translation_scope = body.translation_scope.trim();
       }
 
       const settings = await updateGroupSettings(chatId, patch);
@@ -976,6 +989,9 @@ async function handleMessage(message) {
       return;
     }
     await maybeHandleAntispam(chat, from, message);
+    if (premiumActive) {
+      await maybeHandleAutoTranslation(chat, from, message, groupSettings);
+    }
     return;
   }
 
@@ -1298,6 +1314,11 @@ async function handleCallbackQuery(callback) {
 
   if (data.indexOf("captchacfg:") === 0) {
     await handleCaptchaConfigCallback(callback);
+    return;
+  }
+
+  if (data.indexOf("translationcfg:") === 0) {
+    await handleTranslationConfigCallback(callback);
     return;
   }
 
@@ -1632,6 +1653,17 @@ async function handleConfigMenuCallback(callback) {
       callback.message.message_id,
       buildLogChannelConfigText(settings),
       buildLogChannelConfigKeyboard(targetChatId, settings, groups)
+    );
+    return;
+  }
+
+  if (page === "translation") {
+    await answerCallbackQuery(callback.id, tForSettings(settings, "preview_ready"));
+    await editMessageText(
+      privateChatId,
+      callback.message.message_id,
+      buildTranslationConfigText(settings),
+      buildTranslationConfigKeyboard(targetChatId, settings)
     );
     return;
   }
@@ -2074,6 +2106,48 @@ async function handleCaptchaConfigCallback(callback) {
     callback.message.message_id,
     buildCaptchaConfigText(updated),
     buildCaptchaConfigKeyboard(targetChatId, updated)
+  );
+}
+
+async function handleTranslationConfigCallback(callback) {
+  const parts = String(callback.data || "").split(":");
+  const targetChatId = Number(parts[1]);
+  const action = parts[2] || "";
+  const privateChatId = callback.message.chat.id;
+  const userId = callback.from.id;
+  const settings = await ensureGroupSettings(targetChatId);
+
+  if (!(await isGroupAdmin(targetChatId, userId))) {
+    await answerCallbackQuery(callback.id, tForSettings(settings, "private_not_admin"));
+    return;
+  }
+
+  let updated = settings;
+
+  if (action === "toggle") {
+    updated = await updateGroupSettings(targetChatId, {
+      translation_enabled: !Boolean(settings.translation_enabled)
+    });
+    await logGroupActivitySafe(
+      targetChatId,
+      "settings",
+      "Traduccion automatica",
+      `Estado: ${updated.translation_enabled ? "activa" : "inactiva"}`
+    );
+  } else if (action === "scope") {
+    const next = String(settings.translation_scope || "non_admins") === "all" ? "non_admins" : "all";
+    updated = await updateGroupSettings(targetChatId, {
+      translation_scope: next
+    });
+    await logGroupActivitySafe(targetChatId, "settings", "Traduccion automatica", `Alcance: ${next}`);
+  }
+
+  await answerCallbackQuery(callback.id, tForSettings(updated, "preview_ready"));
+  await editMessageText(
+    privateChatId,
+    callback.message.message_id,
+    buildTranslationConfigText(updated),
+    buildTranslationConfigKeyboard(targetChatId, updated)
   );
 }
 
@@ -3166,6 +3240,7 @@ function buildConfigCategoryKeyboard(chatId, settings, page = "main") {
           [{ text: "👥 Gestion de miembros", callback_data: `cfg:${chatId}:member_permissions` }],
           [{ text: "🫥 Usuarios enmascarados", callback_data: `cfg:${chatId}:masked_users` }],
           [{ text: "📱 Comandos personales", callback_data: `cfg:${chatId}:custom_commands` }],
+          [{ text: "🌐 Traduccion", callback_data: `cfgmenu:translation:${chatId}` }],
           [{ text: "🧾 Canal de logs", callback_data: `cfgmenu:logs:${chatId}` }],
           [
             { text: "◀️ Volver", callback_data: `cfgmenu:main:${chatId}` },
@@ -3423,6 +3498,46 @@ function buildCaptchaConfigKeyboard(chatId, settings) {
         ],
         [
           { text: "◀️ Volver", callback_data: `cfgmenu:main:${chatId}` },
+          { text: "✅ Cerrar", callback_data: `cfgmenu:close:${chatId}` }
+        ]
+      ]
+    }
+  };
+}
+
+function formatTranslationScope(scope) {
+  return String(scope || "non_admins") === "all" ? "Todos" : "Solo usuarios";
+}
+
+function buildTranslationConfigText(settings) {
+  return [
+    "<b>TRADUCCION AUTOMATICA</b>",
+    `Grupo: <b>${escapeHtml(settings.chat_title || "Grupo sincronizado")}</b>`,
+    "",
+    `Estado: <b>${settings.translation_enabled ? "Activada" : "Desactivada"}</b>`,
+    `Destino: <b>${escapeHtml(getLocaleLabel(getGroupLocale(settings)))}</b>`,
+    `Alcance: <b>${escapeHtml(formatTranslationScope(settings.translation_scope))}</b>`,
+    "",
+    "Si un mensaje llega en otro idioma, el bot publicara una traduccion al idioma del grupo."
+  ].join("\n");
+}
+
+function buildTranslationConfigKeyboard(chatId, settings) {
+  return {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          {
+            text: settings.translation_enabled ? "🟢 Desactivar" : "🔴 Activar",
+            callback_data: `translationcfg:${chatId}:toggle`
+          },
+          {
+            text: `👥 ${formatTranslationScope(settings.translation_scope)}`,
+            callback_data: `translationcfg:${chatId}:scope`
+          }
+        ],
+        [
+          { text: "◀️ Volver", callback_data: `cfgmenu:more:${chatId}` },
           { text: "✅ Cerrar", callback_data: `cfgmenu:close:${chatId}` }
         ]
       ]
@@ -4137,6 +4252,104 @@ function shouldBlockMaskedUser(settings, message) {
   }
 
   return Boolean(message.sender_chat && !message.is_automatic_forward);
+}
+
+function shouldTranslateMessage(settings, isAdmin) {
+  if (!settings || !settings.translation_enabled) {
+    return false;
+  }
+
+  const scope = String(settings.translation_scope || "non_admins");
+  if (scope === "all") {
+    return true;
+  }
+
+  return !isAdmin;
+}
+
+function looksLikeOnlyTargetLanguage(text, targetLocale) {
+  const sample = String(text || "").trim();
+  if (!sample) {
+    return true;
+  }
+
+  if (targetLocale === "ar") {
+    return /[\u0600-\u06FF]/.test(sample);
+  }
+
+  if (targetLocale === "en") {
+    return /^[\x00-\x7F\s.,!?@#%&*()_\-+=:;"'`~\/\\[\]{}<>|0-9]+$/.test(sample);
+  }
+
+  return false;
+}
+
+async function translateTextToLocale(text, targetLocale) {
+  const value = String(text || "").trim();
+  if (!value) {
+    return "";
+  }
+
+  const target = normalizeLocale(targetLocale || "es");
+  const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${encodeURIComponent(target)}&dt=t&q=${encodeURIComponent(value)}`;
+
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        "Accept": "application/json"
+      }
+    });
+
+    if (!response.ok) {
+      return "";
+    }
+
+    const payload = await response.json();
+    if (!Array.isArray(payload) || !Array.isArray(payload[0])) {
+      return "";
+    }
+
+    return payload[0]
+      .map((entry) => (Array.isArray(entry) ? String(entry[0] || "") : ""))
+      .join("")
+      .trim();
+  } catch (_error) {
+    return "";
+  }
+}
+
+async function maybeHandleAutoTranslation(chat, from, message, settings) {
+  const visibleText = extractVisibleMessageText(message);
+  if (!visibleText || visibleText.length < 2) {
+    return;
+  }
+
+  const isAdmin = await isGroupAdmin(chat.id, from.id);
+  if (!shouldTranslateMessage(settings, isAdmin)) {
+    return;
+  }
+
+  const targetLocale = getGroupLocale(settings);
+  if (looksLikeOnlyTargetLanguage(visibleText, targetLocale)) {
+    return;
+  }
+
+  const translated = await translateTextToLocale(visibleText, targetLocale);
+  if (!translated || translated.toLowerCase() === visibleText.toLowerCase()) {
+    return;
+  }
+
+  const sourceLabel = from.username ? `@${from.username}` : (from.first_name || "Usuario");
+  await sendMessage(
+    chat.id,
+    [
+      "<b>Traduccion automatica</b>",
+      `De: <b>${escapeHtml(sourceLabel)}</b>`,
+      "",
+      escapeHtml(translated)
+    ].join("\n")
+  ).catch(() => null);
 }
 
 function parseDurationToSeconds(value) {
