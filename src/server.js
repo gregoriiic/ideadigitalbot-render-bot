@@ -1307,7 +1307,7 @@ async function showPrivateStart(privateChatId, userId, locale = "es") {
     return;
   }
 
-  await sendMessage(privateChatId, buildPrivateWelcomeText(locale), buildPrivateHomeKeyboard(locale));
+  await sendMessage(privateChatId, buildPrivateProspectText(locale), buildPrivateProspectKeyboard(locale));
 }
 
 async function showPrivateGroups(privateChatId, userId, locale = "es", panelMessageId = null) {
@@ -1317,15 +1317,15 @@ async function showPrivateGroups(privateChatId, userId, locale = "es", panelMess
     const edited = await editPanelMessage(
       privateChatId,
       panelMessageId,
-      escapeHtml(tForLocale(locale, "private_no_groups")),
-      buildPrivateHomeKeyboard(locale)
+      buildPrivateProspectText(locale),
+      buildPrivateProspectKeyboard(locale)
     );
 
     if (!edited) {
       await sendMessage(
         privateChatId,
-        escapeHtml(tForLocale(locale, "private_no_groups")),
-        buildPrivateHomeKeyboard(locale)
+        buildPrivateProspectText(locale),
+        buildPrivateProspectKeyboard(locale)
       );
     }
     return;
@@ -3370,6 +3370,28 @@ function buildPrivateWelcomeText(locale = "es") {
   ].join("\n");
 }
 
+function buildPrivateProspectText(locale = "es") {
+  if (locale === "en") {
+    return [
+      "<b>Get your own bot</b>",
+      "",
+      "This private panel is only available for owners or admins who already manage groups with the bot.",
+      "",
+      "Contact: @IdeadigitalPeru",
+      "Website: https://ideadigitalbots.xo.je/"
+    ].join("\n");
+  }
+
+  return [
+    "<b>Adquiere tu bot</b>",
+    "",
+    "Este panel privado solo se habilita para usuarios que ya administran grupos con el bot o tienen un bot activo en la plataforma.",
+    "",
+    "Comunicate con: @IdeadigitalPeru",
+    "O ingresa a nuestra pagina web para conocer el servicio."
+  ].join("\n");
+}
+
 function buildPrivateHomeKeyboard(locale = "es") {
   const addUrl = config.botUsername ? `https://t.me/${config.botUsername}?startgroup=true` : config.panelUrl;
 
@@ -3391,6 +3413,31 @@ function buildPrivateHomeKeyboard(locale = "es") {
         ],
         [
           { text: "ℹ️ Ayuda", callback_data: "home:help" }
+        ]
+      ]
+    }
+  };
+}
+
+function buildPrivateProspectKeyboard(locale = "es") {
+  const addUrl = config.botUsername ? `https://t.me/${config.botUsername}?startgroup=true` : config.panelUrl;
+  const websiteUrl = `${config.panelUrl}/`;
+  const contactUrl = "https://t.me/IdeadigitalPeru";
+
+  return {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: locale === "en" ? "Visit website" : "Visitar", url: websiteUrl }
+        ],
+        [
+          { text: locale === "en" ? "Contact support" : "Contactar", url: contactUrl }
+        ],
+        [
+          { text: locale === "en" ? "Add bot to a group" : "Agregar bot al grupo", url: addUrl }
+        ],
+        [
+          { text: locale === "en" ? "Help" : "Ayuda", callback_data: "home:help" }
         ]
       ]
     }
