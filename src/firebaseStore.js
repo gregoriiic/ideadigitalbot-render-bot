@@ -98,6 +98,10 @@ function warningDoc(chatId, userId) {
   return warningsCollection(chatId).doc(String(userId));
 }
 
+function activityLogsCollection(chatId) {
+  return groupDoc(chatId).collection("activityLogs");
+}
+
 function botsCollection() {
   return getFirestore().collection("bots");
 }
@@ -894,6 +898,41 @@ async function listWarningSnapshots(chatId) {
     .sort((left, right) => Number(right.count || 0) - Number(left.count || 0));
 }
 
+async function appendGroupActivityLog(chatId, entry) {
+  const db = getFirestore();
+  if (!db || !Number.isFinite(Number(chatId))) {
+    return null;
+  }
+
+  const ref = activityLogsCollection(Number(chatId)).doc();
+  const payload = {
+    id: ref.id,
+    chat_id: Number(chatId),
+    type: String(entry.type || "info"),
+    title: String(entry.title || "Actividad"),
+    summary: String(entry.summary || ""),
+    created_at: nowIso(),
+    ...entry
+  };
+
+  await ref.set(payload, { merge: true });
+  return payload;
+}
+
+async function listGroupActivityLogs(chatId, limit = 25) {
+  const db = getFirestore();
+  if (!db || !Number.isFinite(Number(chatId))) {
+    return [];
+  }
+
+  const snap = await activityLogsCollection(Number(chatId))
+    .orderBy("created_at", "desc")
+    .limit(Math.max(1, Number(limit) || 25))
+    .get();
+
+  return snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+}
+
 module.exports = {
   hasFirebaseConfig,
   testConnection,
@@ -931,5 +970,7 @@ module.exports = {
   getUserWarnings,
   incrementUserWarnings,
   resetUserWarnings,
-  listWarningSnapshots
+  listWarningSnapshots,
+  appendGroupActivityLog,
+  listGroupActivityLogs
 };

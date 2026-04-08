@@ -59,7 +59,9 @@ const {
   getUserWarnings,
   incrementUserWarnings,
   resetUserWarnings,
-  listWarningSnapshots
+  listWarningSnapshots,
+  appendGroupActivityLog,
+  listGroupActivityLogs
 } = require("./db");
 const { runWithBot, currentBot } = require("./botContext");
 
@@ -536,7 +538,36 @@ app.post("/api/panel/group/:chatId/settings", async (req, res) => {
       }
 
       const settings = await updateGroupSettings(chatId, patch);
+      if (Object.keys(patch).length) {
+        await appendGroupActivityLog(chatId, {
+          type: "settings",
+          title: "Configuracion actualizada",
+          summary: `Campos actualizados: ${Object.keys(patch).join(", ")}`
+        }).catch(() => null);
+      }
       return res.json({ ok: true, previous: current, settings, bot_id: bot ? bot.id : "default" });
+    });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ ok: false, message: error.message });
+  }
+});
+
+app.get("/api/panel/group/:chatId/logs", async (req, res) => {
+  if (!isPanelTokenValid(req)) {
+    return res.status(403).json({ ok: false, message: "Invalid panel token." });
+  }
+
+  try {
+    const bot = await resolvePanelBot(req);
+    return runWithBot(bot, async () => {
+      const chatId = Number(req.params.chatId);
+      if (!Number.isFinite(chatId)) {
+        return res.status(400).json({ ok: false, message: "Invalid chat id." });
+      }
+
+      const logs = await listGroupActivityLogs(chatId, Number(req.query.limit || 25));
+      return res.json({ ok: true, logs, bot_id: bot ? bot.id : "default" });
     });
   } catch (error) {
     console.error(error);
@@ -2459,6 +2490,11 @@ async function handlePrivateTicketMessage(message, text, state) {
 
   await clearUserState(from.id);
   scheduleTicketAutoClose(hydratedTicket || ticket);
+  await appendGroupActivityLog(mainChatId, {
+    type: "ticket",
+    title: `Ticket #${ticket.ticket_number} creado`,
+    summary: `Usuario: ${userLabel}`
+  }).catch(() => null);
   await sendMessage(
     message.chat.id,
     escapeHtml(tForLocale("es", "ticket_created", { number: ticket.ticket_number }))
@@ -2594,6 +2630,11 @@ function scheduleTicketAutoClose(ticket) {
     }
 
     const closed = await closeSupportTicket(ticket.id, "inactive");
+    await appendGroupActivityLog(fresh.main_chat_id, {
+      type: "ticket",
+      title: `Ticket #${fresh.ticket_number} cerrado`,
+      summary: "Cerrado automaticamente por inactividad"
+    }).catch(() => null);
     await sendMessage(
       fresh.user_id,
       escapeHtml(tForLocale("es", "ticket_closed_inactive", { number: fresh.ticket_number }))
@@ -4196,6 +4237,12 @@ async function issueGroupWarning(chat, settings, user, sourceLabel) {
     `Motivo: <b>${escapeHtml(sourceLabel)}</b>`,
     `Warns: <b>${count}/${limit}</b>`
   ]);
+
+  await appendGroupActivityLog(chat.id, {
+    type: "warning",
+    title: "Advertencia registrada",
+    summary: `${user.username ? `@${user.username}` : (user.first_name || "Usuario")} - ${sourceLabel} - ${count}/${limit}`
+  }).catch(() => null);
 
   await applyWarnLimitPenalty(chat, settings, user, warningState, sourceLabel);
   return warningState;

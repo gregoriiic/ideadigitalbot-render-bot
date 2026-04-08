@@ -685,6 +685,22 @@ async function listWarningSnapshots(chatId) {
   return [];
 }
 
+async function appendGroupActivityLog(chatId, entry) {
+  if (useFirebase()) {
+    return firebaseStore.appendGroupActivityLog(chatId, entry);
+  }
+
+  return null;
+}
+
+async function listGroupActivityLogs(chatId, limit) {
+  if (useFirebase()) {
+    return firebaseStore.listGroupActivityLogs(chatId, limit);
+  }
+
+  return [];
+}
+
 module.exports = {
   getPool,
   testDbConnection,
@@ -722,5 +738,7 @@ module.exports = {
   getUserWarnings,
   incrementUserWarnings,
   resetUserWarnings,
-  listWarningSnapshots
+  listWarningSnapshots,
+  appendGroupActivityLog,
+  listGroupActivityLogs
 };
