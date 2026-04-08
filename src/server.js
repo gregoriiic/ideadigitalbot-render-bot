@@ -201,7 +201,8 @@ function buildAdminGroupCommands(settings) {
         { command: "nsorteo", description: "Start a raffle message" },
         { command: "sortear", description: "Pick a raffle winner" },
         { command: "reset", description: "Reset raffle entries" },
-        { command: "announce", description: "Broadcast to main groups" }
+        { command: "announce", description: "Broadcast to main groups" },
+        { command: "gverify", description: "Verify linked main groups" }
       ]
     : [
         { command: "help", description: "Ver los comandos disponibles" },
@@ -210,7 +211,8 @@ function buildAdminGroupCommands(settings) {
         { command: "nsorteo", description: "Publicar un sorteo" },
         { command: "sortear", description: "Elegir ganador del sorteo" },
         { command: "reset", description: "Reiniciar el sorteo" },
-        { command: "announce", description: "Enviar anuncio a grupos" }
+        { command: "announce", description: "Enviar anuncio a grupos" },
+        { command: "gverify", description: "Verificar grupos conectados" }
       ];
 
   return base.concat(adminOnly);
@@ -1046,6 +1048,18 @@ async function handleMessage(message) {
     }
 
     await handleAnnounceCommand(chat, from, message, text);
+    await cleanupCommandMessage(message);
+    return;
+  }
+
+  if (command === "/gverify") {
+    if (!premiumActive) {
+      await sendMessage(chat.id, premiumBlockText()).catch(() => null);
+      await cleanupCommandMessage(message);
+      return;
+    }
+
+    await handleGroupVerifyCommand(chat, from);
     await cleanupCommandMessage(message);
     return;
   }
@@ -2490,13 +2504,13 @@ async function handleAnnounceCommand(chat, from, message, text) {
   }
 
   const announcementText = String(text || "").replace(/^\/announce(@[^\s]+)?/i, "").trim();
-  let delivered = 0;
+  const deliveredGroups = [];
 
   for (const group of targets) {
     if (message.reply_to_message) {
       const copied = await copyMessage(group.chat_id, chat.id, message.reply_to_message.message_id).catch(() => null);
       if (copied && copied.ok) {
-        delivered += 1;
+        deliveredGroups.push(group.chat_title || String(group.chat_id));
       }
       continue;
     }
@@ -2507,7 +2521,7 @@ async function handleAnnounceCommand(chat, from, message, text) {
 
     const sent = await sendMessage(group.chat_id, announcementText).catch(() => null);
     if (sent && sent.ok) {
-      delivered += 1;
+      deliveredGroups.push(group.chat_title || String(group.chat_id));
     }
   }
 
@@ -2519,7 +2533,50 @@ async function handleAnnounceCommand(chat, from, message, text) {
     return;
   }
 
-  await sendMessage(chat.id, `Anuncio enviado a ${delivered} grupo(s).`).catch(() => null);
+  if (!deliveredGroups.length) {
+    await sendMessage(chat.id, "No se pudo enviar el mensaje a los grupos conectados.").catch(() => null);
+    return;
+  }
+
+  await sendMessage(
+    chat.id,
+    [
+      "<b>Mensaje enviado</b>",
+      "",
+      ...deliveredGroups.map((title) => `✅ ${escapeHtml(title)}`)
+    ].join("\n")
+  ).catch(() => null);
+}
+
+async function handleGroupVerifyCommand(chat, from) {
+  if (!(await isGroupAdmin(chat.id, from.id))) {
+    return;
+  }
+
+  const profile = await getUserProfile(from.id);
+  const supportChatId = profile && Number.isFinite(Number(profile.support_group_chat_id))
+    ? Number(profile.support_group_chat_id)
+    : null;
+
+  if (!supportChatId || Number(chat.id) !== supportChatId) {
+    await sendMessage(chat.id, "Este comando solo puede usarse dentro del grupo configurado como customer service.").catch(() => null);
+    return;
+  }
+
+  const targets = (await getManageableGroups(from.id)).filter((group) => Number(group.chat_id) !== Number(chat.id));
+  if (!targets.length) {
+    await sendMessage(chat.id, "No hay grupos principales conectados para esta cuenta.").catch(() => null);
+    return;
+  }
+
+  await sendMessage(
+    chat.id,
+    [
+      "<b>Grupos conectados</b>",
+      "",
+      ...targets.map((group) => `✅ ${escapeHtml(group.chat_title || String(group.chat_id))}`)
+    ].join("\n")
+  ).catch(() => null);
 }
 
 async function handleTicketCommand(chat, from, message) {
