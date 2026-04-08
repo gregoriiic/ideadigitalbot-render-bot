@@ -3362,9 +3362,14 @@ function buildLogChannelConfigText(settings) {
 
 function buildLogChannelConfigKeyboard(chatId, settings, groups = []) {
   const choices = groups
-    .filter((group) => Number(group.chat_id) !== Number(chatId))
     .slice(0, 8)
-    .map((group) => [{ text: `📌 ${group.chat_title || group.chat_id}`, callback_data: `logpick:${chatId}:${group.chat_id}` }]);
+    .map((group) => {
+      const isCurrent = Number(settings.log_channel_chat_id || 0) === Number(group.chat_id);
+      return [{
+        text: `${isCurrent ? "✅" : "📌"} ${group.chat_title || group.chat_id}`,
+        callback_data: `logpick:${chatId}:${group.chat_id}`
+      }];
+    });
 
   const rows = choices.concat([
     [
