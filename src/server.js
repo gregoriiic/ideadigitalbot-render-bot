@@ -3129,7 +3129,7 @@ function buildConfigCategoryKeyboard(chatId, settings, page = "main") {
           { text: "🧪 Filtros", callback_data: `cfgmenu:pending:${chatId}` }
         ],
         [
-          { text: "🚨 Advertencias", callback_data: `cfg:${chatId}:warning` },
+          { text: "🚨 Advertencias", callback_data: `cfgmenu:warning:${chatId}` },
           { text: "🎁 Sorteo", callback_data: `cfgmenu:raffle:${chatId}` }
         ],
         [

@@ -555,6 +555,8 @@ function getDefaultGroupSettings(locale = "es") {
     captcha_timeout_text: "5 m",
     group_link_enabled: false,
     group_link_value: "",
+    translation_enabled: false,
+    translation_scope: "non_admins",
     support_group_chat_id: null,
     support_group_title: "",
     topics_policy: "Permitido",
