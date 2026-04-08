@@ -647,6 +647,14 @@ async function closeSupportTicket(ticketId, reason) {
   return null;
 }
 
+async function listSupportTicketsByGroup(chatId) {
+  if (useFirebase()) {
+    return firebaseStore.listSupportTicketsByGroup(chatId);
+  }
+
+  return [];
+}
+
 async function getUserWarnings(chatId, userId) {
   if (useFirebase()) {
     return firebaseStore.getUserWarnings(chatId, userId);
@@ -667,6 +675,14 @@ async function resetUserWarnings(chatId, userId) {
   if (useFirebase()) {
     return firebaseStore.resetUserWarnings(chatId, userId);
   }
+}
+
+async function listWarningSnapshots(chatId) {
+  if (useFirebase()) {
+    return firebaseStore.listWarningSnapshots(chatId);
+  }
+
+  return [];
 }
 
 module.exports = {
@@ -702,7 +718,9 @@ module.exports = {
   getOpenSupportTicketByUser,
   updateSupportTicket,
   closeSupportTicket,
+  listSupportTicketsByGroup,
   getUserWarnings,
   incrementUserWarnings,
-  resetUserWarnings
+  resetUserWarnings,
+  listWarningSnapshots
 };

@@ -804,6 +804,32 @@ async function closeSupportTicket(ticketId, reason = "inactive") {
   });
 }
 
+async function listSupportTicketsByGroup(chatId) {
+  const db = getFirestore();
+  if (!db || !Number.isFinite(Number(chatId))) {
+    return [];
+  }
+
+  const numericChatId = Number(chatId);
+  const [mainSnap, supportSnap] = await Promise.all([
+    ticketsCollection().where("main_chat_id", "==", numericChatId).get(),
+    ticketsCollection().where("support_chat_id", "==", numericChatId).get()
+  ]);
+
+  const deduped = new Map();
+  [mainSnap, supportSnap].forEach((snap) => {
+    snap.docs.forEach((doc) => {
+      deduped.set(doc.id, { id: doc.id, ...doc.data() });
+    });
+  });
+
+  return Array.from(deduped.values()).sort((left, right) => {
+    const a = new Date(right.updated_at || right.created_at || 0).getTime();
+    const b = new Date(left.updated_at || left.created_at || 0).getTime();
+    return a - b;
+  });
+}
+
 async function getUserWarnings(chatId, userId) {
   const db = getFirestore();
   if (!db) {
@@ -856,6 +882,18 @@ async function resetUserWarnings(chatId, userId) {
   await warningDoc(chatId, userId).delete().catch(() => null);
 }
 
+async function listWarningSnapshots(chatId) {
+  const db = getFirestore();
+  if (!db || !Number.isFinite(Number(chatId))) {
+    return [];
+  }
+
+  const snap = await warningsCollection(Number(chatId)).get();
+  return snap.docs
+    .map((doc) => ({ id: doc.id, ...doc.data() }))
+    .sort((left, right) => Number(right.count || 0) - Number(left.count || 0));
+}
+
 module.exports = {
   hasFirebaseConfig,
   testConnection,
@@ -889,7 +927,9 @@ module.exports = {
   getOpenSupportTicketByUser,
   updateSupportTicket,
   closeSupportTicket,
+  listSupportTicketsByGroup,
   getUserWarnings,
   incrementUserWarnings,
-  resetUserWarnings
+  resetUserWarnings,
+  listWarningSnapshots
 };

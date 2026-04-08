@@ -55,9 +55,11 @@ const {
   getOpenSupportTicketByUser,
   updateSupportTicket,
   closeSupportTicket,
+  listSupportTicketsByGroup,
   getUserWarnings,
   incrementUserWarnings,
-  resetUserWarnings
+  resetUserWarnings,
+  listWarningSnapshots
 } = require("./db");
 const { runWithBot, currentBot } = require("./botContext");
 
@@ -535,6 +537,50 @@ app.post("/api/panel/group/:chatId/settings", async (req, res) => {
 
       const settings = await updateGroupSettings(chatId, patch);
       return res.json({ ok: true, previous: current, settings, bot_id: bot ? bot.id : "default" });
+    });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ ok: false, message: error.message });
+  }
+});
+
+app.get("/api/panel/group/:chatId/tickets", async (req, res) => {
+  if (!isPanelTokenValid(req)) {
+    return res.status(403).json({ ok: false, message: "Invalid panel token." });
+  }
+
+  try {
+    const bot = await resolvePanelBot(req);
+    return runWithBot(bot, async () => {
+      const chatId = Number(req.params.chatId);
+      if (!Number.isFinite(chatId)) {
+        return res.status(400).json({ ok: false, message: "Invalid chat id." });
+      }
+
+      const tickets = await listSupportTicketsByGroup(chatId);
+      return res.json({ ok: true, tickets, bot_id: bot ? bot.id : "default" });
+    });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ ok: false, message: error.message });
+  }
+});
+
+app.get("/api/panel/group/:chatId/warnings", async (req, res) => {
+  if (!isPanelTokenValid(req)) {
+    return res.status(403).json({ ok: false, message: "Invalid panel token." });
+  }
+
+  try {
+    const bot = await resolvePanelBot(req);
+    return runWithBot(bot, async () => {
+      const chatId = Number(req.params.chatId);
+      if (!Number.isFinite(chatId)) {
+        return res.status(400).json({ ok: false, message: "Invalid chat id." });
+      }
+
+      const warnings = await listWarningSnapshots(chatId);
+      return res.json({ ok: true, warnings, bot_id: bot ? bot.id : "default" });
     });
   } catch (error) {
     console.error(error);
