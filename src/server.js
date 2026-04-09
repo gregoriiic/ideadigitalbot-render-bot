@@ -220,7 +220,9 @@ function buildAdminGroupCommands(settings) {
         { command: "sortear", description: "Pick a raffle winner" },
         { command: "reset", description: "Reset raffle entries" },
         { command: "announce", description: "Broadcast to main groups" },
-        { command: "gverify", description: "Verify linked main groups" }
+        { command: "gverify", description: "Verify linked main groups" },
+        { command: "tickets", description: "View recent ticket history" },
+        { command: "logs", description: "View recent activity logs" }
       ]
     : [
         { command: "help", description: "Ver los comandos disponibles" },
@@ -232,7 +234,9 @@ function buildAdminGroupCommands(settings) {
         { command: "sortear", description: "Elegir ganador del sorteo" },
         { command: "reset", description: "Reiniciar el sorteo" },
         { command: "announce", description: "Enviar anuncio a grupos" },
-        { command: "gverify", description: "Verificar grupos conectados" }
+        { command: "gverify", description: "Verificar grupos conectados" },
+        { command: "tickets", description: "Ver historial reciente de tickets" },
+        { command: "logs", description: "Ver actividad reciente del grupo" }
       ];
 
   return base.concat(adminOnly);
@@ -1102,6 +1106,38 @@ async function handleMessage(message) {
     }
 
     await handleGroupVerifyCommand(chat, from);
+    await cleanupCommandMessage(message);
+    return;
+  }
+
+  if (command === "/tickets") {
+    if (!premiumActive) {
+      await sendMessage(chat.id, premiumBlockText()).catch(() => null);
+      await cleanupCommandMessage(message);
+      return;
+    }
+
+    if (!(await isGroupAdmin(chat.id, from.id))) {
+      return;
+    }
+
+    await handleTicketsCommand(chat.id, chat.title || "");
+    await cleanupCommandMessage(message);
+    return;
+  }
+
+  if (command === "/logs") {
+    if (!premiumActive) {
+      await sendMessage(chat.id, premiumBlockText()).catch(() => null);
+      await cleanupCommandMessage(message);
+      return;
+    }
+
+    if (!(await isGroupAdmin(chat.id, from.id))) {
+      return;
+    }
+
+    await handleLogsCommand(chat.id, chat.title || "");
     await cleanupCommandMessage(message);
     return;
   }
@@ -2774,6 +2810,100 @@ async function handleGroupVerifyCommand(chat, from) {
       ...targets.map((group) => `✅ ${escapeHtml(group.chat_title || String(group.chat_id))}`)
     ].join("\n")
   ).catch(() => null);
+}
+
+function ticketStatusIcon(status) {
+  return String(status || "").toLowerCase() === "closed" ? "🔴" : "🟢";
+}
+
+function ticketReasonLabel(reason) {
+  const value = String(reason || "").toLowerCase();
+  if (value === "inactive") {
+    return "inactividad";
+  }
+  if (value === "manual") {
+    return "cierre manual";
+  }
+  if (value === "resolved") {
+    return "resuelto";
+  }
+  return value || "sin motivo";
+}
+
+async function handleTicketsCommand(chatId, chatTitle = "") {
+  if (!(await isDatabaseAvailable())) {
+    await sendMessage(chatId, tForLocale("es", "database_unavailable"));
+    return;
+  }
+
+  const tickets = await listSupportTicketsByGroup(chatId);
+  if (!tickets.length) {
+    await sendMessage(chatId, "<b>Historial de tickets</b>\n\nNo hay tickets registrados todavia.");
+    return;
+  }
+
+  const lines = [
+    "<b>Historial de tickets</b>",
+    `<b>Grupo:</b> ${escapeHtml(chatTitle || "Grupo")}`,
+    ""
+  ];
+
+  tickets.slice(0, 8).forEach((ticket) => {
+    const userLabel = ticket.username
+      ? `@${String(ticket.username).replace(/^@/, "")}`
+      : (ticket.first_name || String(ticket.user_id || "Usuario"));
+    const status = String(ticket.status || "open").toLowerCase();
+    const lastAdmin = ticket.last_support_admin || "Sin respuesta";
+    const replyCount = Number(ticket.support_reply_count || 0);
+    const lastAt = ticket.last_activity_at || ticket.updated_at || ticket.created_at || "";
+
+    lines.push(`${ticketStatusIcon(status)} <b>Ticket #${escapeHtml(ticket.ticket_number || "?")}</b>`);
+    lines.push(`Usuario: <b>${escapeHtml(userLabel)}</b>`);
+    lines.push(`Estado: <b>${escapeHtml(status === "closed" ? "cerrado" : "abierto")}</b>`);
+    lines.push(`Respuestas soporte: <b>${replyCount}</b>`);
+    lines.push(`Ultimo admin: <b>${escapeHtml(lastAdmin)}</b>`);
+    if (ticket.closed_reason) {
+      lines.push(`Cierre: <b>${escapeHtml(ticketReasonLabel(ticket.closed_reason))}</b>`);
+    }
+    if (lastAt) {
+      lines.push(`Ultima actividad: <b>${escapeHtml(lastAt)}</b>`);
+    }
+    lines.push("");
+  });
+
+  await sendMessage(chatId, lines.join("\n"));
+}
+
+async function handleLogsCommand(chatId, chatTitle = "") {
+  if (!(await isDatabaseAvailable())) {
+    await sendMessage(chatId, tForLocale("es", "database_unavailable"));
+    return;
+  }
+
+  const logs = await listGroupActivityLogs(chatId, 10);
+  if (!logs.length) {
+    await sendMessage(chatId, "<b>Actividad reciente</b>\n\nNo hay eventos registrados todavia.");
+    return;
+  }
+
+  const lines = [
+    "<b>Actividad reciente</b>",
+    `<b>Grupo:</b> ${escapeHtml(chatTitle || "Grupo")}`,
+    ""
+  ];
+
+  logs.forEach((entry, index) => {
+    lines.push(`${index + 1}. <b>${escapeHtml(entry.title || entry.type || "Evento")}</b>`);
+    if (entry.summary) {
+      lines.push(escapeHtml(entry.summary));
+    }
+    if (entry.created_at) {
+      lines.push(`<b>Fecha:</b> ${escapeHtml(entry.created_at)}`);
+    }
+    lines.push("");
+  });
+
+  await sendMessage(chatId, lines.join("\n"));
 }
 
 async function handleTicketCommand(chat, from, message) {
