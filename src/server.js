@@ -2446,7 +2446,8 @@ async function handleStaffCommand(chatId, chatTitle = "") {
       return;
     }
 
-    lines.push(`- <b>${escapeHtml(item.rank)}</b>: ${item.mention}`);
+    lines.push(`${staffRankIcon(item.rank)} <b>${escapeHtml(item.rank)}</b>`);
+    lines.push(`       ${item.mention}`);
   });
 
   if (lines.length === 1) {
@@ -2919,6 +2920,22 @@ function staffRankWeight(rank) {
   }
 
   return 1;
+}
+
+function staffRankIcon(rank) {
+  if (rank === "Propietario") {
+    return "👑";
+  }
+
+  if (rank === "Co-Lider") {
+    return "💎";
+  }
+
+  if (rank === "Lider") {
+    return "🛡️";
+  }
+
+  return "🔹";
 }
 
 function countAdminPermissions(item) {
