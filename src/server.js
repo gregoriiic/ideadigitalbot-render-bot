@@ -1442,7 +1442,11 @@ async function handleHomeCallback(callback) {
 }
 
 async function showPrivateStart(privateChatId, userId, locale = "es") {
-  const groups = await getManageableGroups(userId);
+  const profile = await getUserProfile(userId);
+  const supportChatId = profile && Number.isFinite(Number(profile.support_group_chat_id))
+    ? Number(profile.support_group_chat_id)
+    : null;
+  const groups = (await getManageableGroups(userId)).filter((group) => group.chat_id !== supportChatId);
 
   if (groups.length) {
     await sendMessage(
@@ -1461,7 +1465,11 @@ async function showPrivateStart(privateChatId, userId, locale = "es") {
 }
 
 async function showPrivateGroups(privateChatId, userId, locale = "es", panelMessageId = null) {
-  const available = await getManageableGroups(userId);
+  const profile = await getUserProfile(userId);
+  const supportChatId = profile && Number.isFinite(Number(profile.support_group_chat_id))
+    ? Number(profile.support_group_chat_id)
+    : null;
+  const available = (await getManageableGroups(userId)).filter((group) => group.chat_id !== supportChatId);
 
   if (!available.length) {
     const edited = await editPanelMessage(
