@@ -252,8 +252,12 @@ async function syncGroupCommandMenus(chatId, settings) {
   const adminCommands = buildAdminGroupCommands(settings);
   const groupScope = { type: "chat", chat_id: Number(chatId) };
   const adminScope = { type: "chat_administrators", chat_id: Number(chatId) };
+  const globalGroupScope = { type: "all_group_chats" };
+  const globalAdminScope = { type: "all_chat_administrators" };
 
   const results = await Promise.allSettled([
+    setMyCommands(publicCommands, globalGroupScope),
+    setMyCommands(adminCommands, globalAdminScope),
     setMyCommands(publicCommands, groupScope),
     setMyCommands(adminCommands, adminScope),
     syncPrivateCommandMenu()
@@ -264,7 +268,13 @@ async function syncGroupCommandMenus(chatId, settings) {
     results[0].value.ok &&
     results[1].status === "fulfilled" &&
     results[1].value &&
-    results[1].value.ok;
+    results[1].value.ok &&
+    results[2].status === "fulfilled" &&
+    results[2].value &&
+    results[2].value.ok &&
+    results[3].status === "fulfilled" &&
+    results[3].value &&
+    results[3].value.ok;
 
   if (ok) {
     commandSyncTracker.set(cacheKey, Date.now());
