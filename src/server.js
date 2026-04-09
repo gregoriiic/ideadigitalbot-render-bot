@@ -3226,10 +3226,10 @@ function buildManageKeyboard(chatId, settings = { group_language: "es" }) {
 
 function buildConfigMenuText(settings) {
   return [
-    "<b>CONFIGURACION</b>",
+    `<b>${escapeHtml(uiText(settings, "config_title"))}</b>`,
     `Grupo: <b>${escapeHtml(settings.chat_title || "Grupo sincronizado")}</b>`,
     "",
-    "Elige cual de los ajustes quieres editar."
+    escapeHtml(uiText(settings, "config_choose"))
   ].join("\n");
 }
 
@@ -3301,18 +3301,18 @@ function buildConfigCategoryKeyboard(chatId, settings, page = "main") {
     return {
       reply_markup: {
         inline_keyboard: [
-          [{ text: "📁 Temas / Topics", callback_data: `cfg:${chatId}:topics` }],
-          [{ text: "🔤 Palabras prohibidas", callback_data: `cfg:${chatId}:banned_words` }],
-          [{ text: "🕘 Mensajes recurrentes", callback_data: `cfg:${chatId}:repeated_messages` }],
-          [{ text: "👥 Gestion de miembros", callback_data: `cfg:${chatId}:member_permissions` }],
-          [{ text: "🫥 Usuarios enmascarados", callback_data: `cfg:${chatId}:masked_users` }],
-          [{ text: "📱 Comandos personales", callback_data: `cfg:${chatId}:custom_commands` }],
-          [{ text: "🌐 Traduccion", callback_data: `cfgmenu:translation:${chatId}` }],
-          [{ text: "🧾 Canal de logs", callback_data: `cfgmenu:logs:${chatId}` }],
+          [{ text: uiText(settings, "topics"), callback_data: `cfg:${chatId}:topics` }],
+          [{ text: uiText(settings, "banned_words"), callback_data: `cfg:${chatId}:banned_words` }],
+          [{ text: uiText(settings, "repeated_messages"), callback_data: `cfg:${chatId}:repeated_messages` }],
+          [{ text: uiText(settings, "member_permissions"), callback_data: `cfg:${chatId}:member_permissions` }],
+          [{ text: uiText(settings, "masked_users"), callback_data: `cfg:${chatId}:masked_users` }],
+          [{ text: uiText(settings, "custom_commands"), callback_data: `cfg:${chatId}:custom_commands` }],
+          [{ text: uiText(settings, "translation"), callback_data: `cfgmenu:translation:${chatId}` }],
+          [{ text: uiText(settings, "log_channel"), callback_data: `cfgmenu:logs:${chatId}` }],
           [
-            { text: "◀️ Volver", callback_data: `cfgmenu:main:${chatId}` },
-            { text: "✅ Cerrar", callback_data: `cfgmenu:close:${chatId}` },
-            { text: "🌐 Lang", callback_data: `cfg:${chatId}:language` }
+            { text: uiText(settings, "back"), callback_data: `cfgmenu:main:${chatId}` },
+            { text: uiText(settings, "close"), callback_data: `cfgmenu:close:${chatId}` },
+            { text: uiText(settings, "lang"), callback_data: `cfg:${chatId}:language` }
           ]
         ]
       }
@@ -3323,29 +3323,29 @@ function buildConfigCategoryKeyboard(chatId, settings, page = "main") {
     reply_markup: {
       inline_keyboard: [
         [
-          { text: "📜 Reglamento", callback_data: `cfg:${chatId}:rules` },
-          { text: "🛡️ Antispam", callback_data: `cfgmenu:antispam:${chatId}` }
+          { text: uiText(settings, "rules"), callback_data: `cfg:${chatId}:rules` },
+          { text: uiText(settings, "antispam"), callback_data: `cfgmenu:antispam:${chatId}` }
         ],
         [
-          { text: "💬 Bienvenida", callback_data: `cfg:${chatId}:welcome` },
-          { text: "🌊 Anti-flood", callback_data: `cfg:${chatId}:repeated_messages` }
+          { text: uiText(settings, "welcome"), callback_data: `cfg:${chatId}:welcome` },
+          { text: uiText(settings, "antiflood"), callback_data: `cfg:${chatId}:repeated_messages` }
         ],
         [
-          { text: "🧠 Captcha", callback_data: `cfgmenu:captcha:${chatId}` },
-          { text: "🧪 Filtros", callback_data: `cfg:${chatId}:banned_words` }
+          { text: uiText(settings, "captcha"), callback_data: `cfgmenu:captcha:${chatId}` },
+          { text: uiText(settings, "filters"), callback_data: `cfg:${chatId}:banned_words` }
         ],
         [
-          { text: "🚨 Advertencias", callback_data: `cfgmenu:warning:${chatId}` },
-          { text: "🎁 Sorteo", callback_data: `cfgmenu:raffle:${chatId}` }
+          { text: uiText(settings, "warnings"), callback_data: `cfgmenu:warning:${chatId}` },
+          { text: uiText(settings, "raffle"), callback_data: `cfgmenu:raffle:${chatId}` }
         ],
         [
-          { text: "👥 Staff", callback_data: `cfgmenu:staff:${chatId}` },
-          { text: "🔗 Enlace del grupo", callback_data: `cfgmenu:link:${chatId}` }
+          { text: uiText(settings, "staff"), callback_data: `cfgmenu:staff:${chatId}` },
+          { text: uiText(settings, "group_link"), callback_data: `cfgmenu:link:${chatId}` }
         ],
         [
-          { text: "🌐 Lang", callback_data: `cfg:${chatId}:language` },
-          { text: "✅ Cerrar", callback_data: `cfgmenu:close:${chatId}` },
-          { text: "▶️ Mas", callback_data: `cfgmenu:more:${chatId}` }
+          { text: uiText(settings, "lang"), callback_data: `cfg:${chatId}:language` },
+          { text: uiText(settings, "close"), callback_data: `cfgmenu:close:${chatId}` },
+          { text: uiText(settings, "more"), callback_data: `cfgmenu:more:${chatId}` }
         ]
       ]
     }
@@ -3353,12 +3353,13 @@ function buildConfigCategoryKeyboard(chatId, settings, page = "main") {
 }
 
 function buildSimpleBackKeyboard(chatId) {
+  const settings = { chat_id: chatId, group_language: "es" };
   return {
     reply_markup: {
       inline_keyboard: [
         [
-          { text: "◀️ Volver", callback_data: `cfgmenu:main:${chatId}` },
-          { text: "✅ Cerrar", callback_data: `cfgmenu:close:${chatId}` }
+          { text: uiText(settings, "back"), callback_data: `cfgmenu:main:${chatId}` },
+          { text: uiText(settings, "close"), callback_data: `cfgmenu:close:${chatId}` }
         ]
       ]
     }
@@ -3385,15 +3386,15 @@ function buildRaffleConfigKeyboard(chatId, settings) {
   const listUrl = buildRaffleListUrl(chatId);
   const rows = [
     [
-      { text: "📜 Editar reglas", callback_data: `cfg:${chatId}:rules` },
-      { text: "📝 Editar mensaje", callback_data: `cfg:${chatId}:raffle_intro` }
+      { text: `${uiText(settings, "edit")} ${uiText(settings, "rules").replace(/^[^\s]+\s/, "")}`, callback_data: `cfg:${chatId}:rules` },
+      { text: `${uiText(settings, "edit")} ${tForSettings(settings, "preview_raffle_text")}`, callback_data: `cfg:${chatId}:raffle_intro` }
     ],
     [
-      { text: "🌐 Ver lista publica", url: listUrl || `${config.panelUrl}/raffle_live.php?chat_id=${chatId}` }
+      { text: uiText(settings, "public_list"), url: listUrl || `${config.panelUrl}/raffle_live.php?chat_id=${chatId}` }
     ],
     [
-      { text: "◀️ Volver", callback_data: `cfgmenu:main:${chatId}` },
-      { text: "✅ Cerrar", callback_data: `cfgmenu:close:${chatId}` }
+      { text: uiText(settings, "back"), callback_data: `cfgmenu:main:${chatId}` },
+      { text: uiText(settings, "close"), callback_data: `cfgmenu:close:${chatId}` }
     ]
   ];
 
@@ -3438,8 +3439,8 @@ function buildAntispamConfigKeyboard(chatId, settings) {
           }
         ],
         [
-          { text: "◀️ Volver", callback_data: `cfgmenu:main:${chatId}` },
-          { text: "✅ Cerrar", callback_data: `cfgmenu:close:${chatId}` }
+          { text: uiText(settings, "back"), callback_data: `cfgmenu:main:${chatId}` },
+          { text: uiText(settings, "close"), callback_data: `cfgmenu:close:${chatId}` }
         ]
       ]
     }
@@ -3466,7 +3467,7 @@ function buildWarningConfigKeyboard(chatId, settings) {
     reply_markup: {
       inline_keyboard: [
         [
-          { text: "✏️ Editar mensaje", callback_data: `cfgedit:${chatId}:warning` },
+          { text: `${uiText(settings, "edit")} ${tForSettings(settings, "preview_warning")}`, callback_data: `cfgedit:${chatId}:warning` },
           { text: `🔢 Limite: ${getWarnLimit(settings)}`, callback_data: `warningcfg:${chatId}:limit` }
         ],
         [
@@ -3480,11 +3481,11 @@ function buildWarningConfigKeyboard(chatId, settings) {
           }
         ],
         [
-          { text: "🧾 Canal de logs", callback_data: `cfgmenu:logs:${chatId}` }
+          { text: uiText(settings, "log_channel"), callback_data: `cfgmenu:logs:${chatId}` }
         ],
         [
-          { text: "◀️ Volver", callback_data: `cfgmenu:main:${chatId}` },
-          { text: "✅ Cerrar", callback_data: `cfgmenu:close:${chatId}` }
+          { text: uiText(settings, "back"), callback_data: `cfgmenu:main:${chatId}` },
+          { text: uiText(settings, "close"), callback_data: `cfgmenu:close:${chatId}` }
         ]
       ]
     }
@@ -3493,7 +3494,7 @@ function buildWarningConfigKeyboard(chatId, settings) {
 
 function buildLogChannelConfigText(settings) {
   return [
-    "<b>CANAL DE LOGS</b>",
+    `<b>${escapeHtml(uiText(settings, "logs_title"))}</b>`,
     `Grupo: <b>${escapeHtml(settings.chat_title || "Grupo sincronizado")}</b>`,
     "",
     `Canal actual: <b>${escapeHtml(getLogChannelLabel(settings))}</b>`,
@@ -3515,11 +3516,11 @@ function buildLogChannelConfigKeyboard(chatId, settings, groups = []) {
 
   const rows = choices.concat([
     [
-      { text: "🚫 Desconectar logs", callback_data: `logcfg:${chatId}:disable` }
+      { text: uiText(settings, "disable_logs"), callback_data: `logcfg:${chatId}:disable` }
     ],
     [
-      { text: "◀️ Volver", callback_data: `cfgmenu:warning:${chatId}` },
-      { text: "✅ Cerrar", callback_data: `cfgmenu:close:${chatId}` }
+      { text: uiText(settings, "back"), callback_data: `cfgmenu:warning:${chatId}` },
+      { text: uiText(settings, "close"), callback_data: `cfgmenu:close:${chatId}` }
     ]
   ]);
 
@@ -3544,7 +3545,7 @@ function formatCaptchaMode(mode) {
 
 function buildCaptchaConfigText(settings) {
   return [
-    "<b>CAPTCHA Y APROBACION</b>",
+    `<b>${escapeHtml(uiText(settings, "captcha_title"))}</b>`,
     `Grupo: <b>${escapeHtml(settings.chat_title || "Grupo sincronizado")}</b>`,
     "",
     `Modo actual: <b>${escapeHtml(formatCaptchaMode(settings.captcha_mode))}</b>`,
@@ -3564,8 +3565,8 @@ function buildCaptchaConfigKeyboard(chatId, settings) {
           { text: `⏱️ ${settings.captcha_timeout_text || "5 m"}`, callback_data: `captchacfg:${chatId}:timeout` }
         ],
         [
-          { text: "◀️ Volver", callback_data: `cfgmenu:main:${chatId}` },
-          { text: "✅ Cerrar", callback_data: `cfgmenu:close:${chatId}` }
+          { text: uiText(settings, "back"), callback_data: `cfgmenu:main:${chatId}` },
+          { text: uiText(settings, "close"), callback_data: `cfgmenu:close:${chatId}` }
         ]
       ]
     }
@@ -3578,7 +3579,7 @@ function formatTranslationScope(scope) {
 
 function buildTranslationConfigText(settings) {
   return [
-    "<b>TRADUCCION AUTOMATICA</b>",
+    `<b>${escapeHtml(uiText(settings, "translation_title"))}</b>`,
     `Grupo: <b>${escapeHtml(settings.chat_title || "Grupo sincronizado")}</b>`,
     "",
     `Estado: <b>${settings.translation_enabled ? "Activada" : "Desactivada"}</b>`,
@@ -3604,8 +3605,8 @@ function buildTranslationConfigKeyboard(chatId, settings) {
           }
         ],
         [
-          { text: "◀️ Volver", callback_data: `cfgmenu:more:${chatId}` },
-          { text: "✅ Cerrar", callback_data: `cfgmenu:close:${chatId}` }
+          { text: uiText(settings, "back"), callback_data: `cfgmenu:more:${chatId}` },
+          { text: uiText(settings, "close"), callback_data: `cfgmenu:close:${chatId}` }
         ]
       ]
     }
@@ -3614,7 +3615,7 @@ function buildTranslationConfigKeyboard(chatId, settings) {
 
 function buildGroupLinkConfigText(settings) {
   return [
-    "<b>ENLACE DEL GRUPO</b>",
+    `<b>${escapeHtml(uiText(settings, "group_link_title"))}</b>`,
     `Grupo: <b>${escapeHtml(settings.chat_title || "Grupo sincronizado")}</b>`,
     "",
     `Estado: <b>${settings.group_link_enabled ? "Activado" : "Desactivado"}</b>`,
@@ -3639,8 +3640,8 @@ function buildGroupLinkConfigKeyboard(chatId, settings) {
           }
         ],
         [
-          { text: "◀️ Volver", callback_data: `cfgmenu:main:${chatId}` },
-          { text: "✅ Cerrar", callback_data: `cfgmenu:close:${chatId}` }
+          { text: uiText(settings, "back"), callback_data: `cfgmenu:main:${chatId}` },
+          { text: uiText(settings, "close"), callback_data: `cfgmenu:close:${chatId}` }
         ]
       ]
     }
@@ -4134,6 +4135,249 @@ function tForLocale(locale, key, vars = {}) {
 
 function tForSettings(settings, key, vars = {}) {
   return tForLocale(getGroupLocale(settings), key, vars);
+}
+
+function uiText(settings, key) {
+  const locale = getGroupLocale(settings);
+  const catalog = {
+    es: {
+      config_title: "CONFIGURACION",
+      config_choose: "Elige cual de los ajustes quieres editar.",
+      rules: "📜 Reglamento",
+      antispam: "🛡️ Antispam",
+      welcome: "💬 Bienvenida",
+      antiflood: "🌊 Anti-flood",
+      captcha: "🧠 Captcha",
+      filters: "🧪 Filtros",
+      warnings: "🚨 Advertencias",
+      raffle: "🎁 Sorteo",
+      staff: "👥 Staff",
+      group_link: "🔗 Enlace del grupo",
+      lang: "🌐 Lang",
+      close: "✅ Cerrar",
+      more: "▶️ Mas",
+      back: "◀️ Volver",
+      topics: "📁 Temas / Topics",
+      banned_words: "🔤 Palabras prohibidas",
+      repeated_messages: "🕘 Mensajes recurrentes",
+      member_permissions: "👥 Gestion de miembros",
+      masked_users: "🫥 Usuarios enmascarados",
+      custom_commands: "📱 Comandos personales",
+      translation: "🌐 Traduccion",
+      log_channel: "🧾 Canal de logs",
+      raffle_config_title: "CONFIGURACION DEL SORTEO",
+      staff_title: "STAFF DEL GRUPO",
+      antispam_title: "CONFIGURACION ANTISPAM",
+      warnings_title: "CONFIGURACION DE ADVERTENCIAS",
+      logs_title: "CANAL DE LOGS",
+      captcha_title: "CAPTCHA Y APROBACION",
+      translation_title: "TRADUCCION AUTOMATICA",
+      group_link_title: "ENLACE DEL GRUPO",
+      customer_service_title: "CUSTOMER SERVICE GROUP",
+      edit: "✏️ Editar",
+      auto_delete: "⏱️ Autoeliminar",
+      public_list: "🌐 Ver lista publica",
+      disable_logs: "🚫 Desconectar logs"
+    },
+    en: {
+      config_title: "SETTINGS",
+      config_choose: "Choose which setting you want to edit.",
+      rules: "📜 Rules",
+      antispam: "🛡️ Antispam",
+      welcome: "💬 Welcome",
+      antiflood: "🌊 Anti-flood",
+      captcha: "🧠 Captcha",
+      filters: "🧪 Filters",
+      warnings: "🚨 Warnings",
+      raffle: "🎁 Raffle",
+      staff: "👥 Staff",
+      group_link: "🔗 Group link",
+      lang: "🌐 Lang",
+      close: "✅ Close",
+      more: "▶️ More",
+      back: "◀️ Back",
+      topics: "📁 Topics",
+      banned_words: "🔤 Banned words",
+      repeated_messages: "🕘 Repeated messages",
+      member_permissions: "👥 Member permissions",
+      masked_users: "🫥 Masked users",
+      custom_commands: "📱 Custom commands",
+      translation: "🌐 Translation",
+      log_channel: "🧾 Log channel",
+      raffle_config_title: "RAFFLE SETTINGS",
+      staff_title: "GROUP STAFF",
+      antispam_title: "ANTISPAM SETTINGS",
+      warnings_title: "WARNING SETTINGS",
+      logs_title: "LOG CHANNEL",
+      captcha_title: "CAPTCHA AND APPROVAL",
+      translation_title: "AUTO TRANSLATION",
+      group_link_title: "GROUP LINK",
+      customer_service_title: "CUSTOMER SERVICE GROUP",
+      edit: "✏️ Edit",
+      auto_delete: "⏱️ Auto-delete",
+      public_list: "🌐 View public list",
+      disable_logs: "🚫 Disconnect logs"
+    },
+    fr: {
+      config_title: "CONFIGURATION",
+      config_choose: "Choisissez le parametre que vous voulez modifier.",
+      rules: "📜 Regles",
+      antispam: "🛡️ Anti-spam",
+      welcome: "💬 Bienvenue",
+      antiflood: "🌊 Anti-flood",
+      captcha: "🧠 Captcha",
+      filters: "🧪 Filtres",
+      warnings: "🚨 Avertissements",
+      raffle: "🎁 Tirage",
+      staff: "👥 Staff",
+      group_link: "🔗 Lien du groupe",
+      lang: "🌐 Lang",
+      close: "✅ Fermer",
+      more: "▶️ Plus",
+      back: "◀️ Retour",
+      topics: "📁 Topics",
+      banned_words: "🔤 Mots interdits",
+      repeated_messages: "🕘 Messages repetes",
+      member_permissions: "👥 Permissions des membres",
+      masked_users: "🫥 Utilisateurs masques",
+      custom_commands: "📱 Commandes personnelles",
+      translation: "🌐 Traduction",
+      log_channel: "🧾 Canal de logs",
+      raffle_config_title: "CONFIGURATION DU TIRAGE",
+      staff_title: "STAFF DU GROUPE",
+      antispam_title: "CONFIGURATION ANTI-SPAM",
+      warnings_title: "CONFIGURATION DES AVERTISSEMENTS",
+      logs_title: "CANAL DE LOGS",
+      captcha_title: "CAPTCHA ET APPROBATION",
+      translation_title: "TRADUCTION AUTOMATIQUE",
+      group_link_title: "LIEN DU GROUPE",
+      customer_service_title: "GROUPE CUSTOMER SERVICE",
+      edit: "✏️ Modifier",
+      auto_delete: "⏱️ Auto-suppression",
+      public_list: "🌐 Voir la liste publique",
+      disable_logs: "🚫 Deconnecter les logs"
+    },
+    pt: {
+      config_title: "CONFIGURACAO",
+      config_choose: "Escolha qual ajuste deseja editar.",
+      rules: "📜 Regras",
+      antispam: "🛡️ Antispam",
+      welcome: "💬 Boas-vindas",
+      antiflood: "🌊 Anti-flood",
+      captcha: "🧠 Captcha",
+      filters: "🧪 Filtros",
+      warnings: "🚨 Avisos",
+      raffle: "🎁 Sorteio",
+      staff: "👥 Staff",
+      group_link: "🔗 Link do grupo",
+      lang: "🌐 Lang",
+      close: "✅ Fechar",
+      more: "▶️ Mais",
+      back: "◀️ Voltar",
+      topics: "📁 Topics",
+      banned_words: "🔤 Palavras proibidas",
+      repeated_messages: "🕘 Mensagens repetidas",
+      member_permissions: "👥 Permissoes dos membros",
+      masked_users: "🫥 Usuarios mascarados",
+      custom_commands: "📱 Comandos personalizados",
+      translation: "🌐 Traducao",
+      log_channel: "🧾 Canal de logs",
+      raffle_config_title: "CONFIGURACAO DO SORTEIO",
+      staff_title: "STAFF DO GRUPO",
+      antispam_title: "CONFIGURACAO ANTISPAM",
+      warnings_title: "CONFIGURACAO DE AVISOS",
+      logs_title: "CANAL DE LOGS",
+      captcha_title: "CAPTCHA E APROVACAO",
+      translation_title: "TRADUCAO AUTOMATICA",
+      group_link_title: "LINK DO GRUPO",
+      customer_service_title: "GRUPO CUSTOMER SERVICE",
+      edit: "✏️ Editar",
+      auto_delete: "⏱️ Auto-apagar",
+      public_list: "🌐 Ver lista publica",
+      disable_logs: "🚫 Desconectar logs"
+    },
+    it: {
+      config_title: "CONFIGURAZIONE",
+      config_choose: "Scegli quale impostazione vuoi modificare.",
+      rules: "📜 Regole",
+      antispam: "🛡️ Antispam",
+      welcome: "💬 Benvenuto",
+      antiflood: "🌊 Anti-flood",
+      captcha: "🧠 Captcha",
+      filters: "🧪 Filtri",
+      warnings: "🚨 Avvisi",
+      raffle: "🎁 Sorteggio",
+      staff: "👥 Staff",
+      group_link: "🔗 Link del gruppo",
+      lang: "🌐 Lang",
+      close: "✅ Chiudi",
+      more: "▶️ Altro",
+      back: "◀️ Indietro",
+      topics: "📁 Topics",
+      banned_words: "🔤 Parole vietate",
+      repeated_messages: "🕘 Messaggi ripetuti",
+      member_permissions: "👥 Permessi membri",
+      masked_users: "🫥 Utenti mascherati",
+      custom_commands: "📱 Comandi personalizzati",
+      translation: "🌐 Traduzione",
+      log_channel: "🧾 Canale log",
+      raffle_config_title: "CONFIGURAZIONE DEL SORTEGGIO",
+      staff_title: "STAFF DEL GRUPPO",
+      antispam_title: "CONFIGURAZIONE ANTISPAM",
+      warnings_title: "CONFIGURAZIONE AVVISI",
+      logs_title: "CANALE DEI LOG",
+      captcha_title: "CAPTCHA E APPROVAZIONE",
+      translation_title: "TRADUZIONE AUTOMATICA",
+      group_link_title: "LINK DEL GRUPPO",
+      customer_service_title: "GRUPPO CUSTOMER SERVICE",
+      edit: "✏️ Modifica",
+      auto_delete: "⏱️ Auto-elimina",
+      public_list: "🌐 Vedi lista pubblica",
+      disable_logs: "🚫 Disconnetti log"
+    },
+    ar: {
+      config_title: "الاعدادات",
+      config_choose: "اختر الاعداد الذي تريد تعديله.",
+      rules: "📜 القوانين",
+      antispam: "🛡️ مكافحة السبام",
+      welcome: "💬 الترحيب",
+      antiflood: "🌊 مكافحة الاغراق",
+      captcha: "🧠 التحقق",
+      filters: "🧪 الفلاتر",
+      warnings: "🚨 التحذيرات",
+      raffle: "🎁 السحب",
+      staff: "👥 الطاقم",
+      group_link: "🔗 رابط المجموعة",
+      lang: "🌐 اللغة",
+      close: "✅ اغلاق",
+      more: "▶️ المزيد",
+      back: "◀️ رجوع",
+      topics: "📁 المواضيع",
+      banned_words: "🔤 الكلمات المحظورة",
+      repeated_messages: "🕘 الرسائل المتكررة",
+      member_permissions: "👥 صلاحيات الاعضاء",
+      masked_users: "🫥 المستخدمون المقنعون",
+      custom_commands: "📱 الاوامر المخصصة",
+      translation: "🌐 الترجمة",
+      log_channel: "🧾 قناة السجلات",
+      raffle_config_title: "اعدادات السحب",
+      staff_title: "طاقم المجموعة",
+      antispam_title: "اعدادات مكافحة السبام",
+      warnings_title: "اعدادات التحذيرات",
+      logs_title: "قناة السجلات",
+      captcha_title: "التحقق والموافقة",
+      translation_title: "الترجمة التلقائية",
+      group_link_title: "رابط المجموعة",
+      customer_service_title: "مجموعة خدمة العملاء",
+      edit: "✏️ تعديل",
+      auto_delete: "⏱️ حذف تلقائي",
+      public_list: "🌐 عرض القائمة العامة",
+      disable_logs: "🚫 فصل السجلات"
+    }
+  };
+
+  const chosen = catalog[locale] || catalog.es;
+  return chosen[key] || catalog.es[key] || key;
 }
 
 function formatLocaleOptions(locale) {
