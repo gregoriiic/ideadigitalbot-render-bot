@@ -198,6 +198,8 @@ function buildAdminGroupCommands(settings) {
         { command: "help", description: "Show available commands" },
         { command: "panelbot", description: "Open the private admin panel" },
         { command: "warn", description: "Warn the replied user" },
+        { command: "warns", description: "Show warning count" },
+        { command: "clearwarns", description: "Clear a user's warnings" },
         { command: "nsorteo", description: "Start a raffle message" },
         { command: "sortear", description: "Pick a raffle winner" },
         { command: "reset", description: "Reset raffle entries" },
@@ -208,6 +210,8 @@ function buildAdminGroupCommands(settings) {
         { command: "help", description: "Ver los comandos disponibles" },
         { command: "panelbot", description: "Abrir panel privado de admin" },
         { command: "warn", description: "Advertir al usuario respondido" },
+        { command: "warns", description: "Ver advertencias acumuladas" },
+        { command: "clearwarns", description: "Limpiar advertencias de un usuario" },
         { command: "nsorteo", description: "Publicar un sorteo" },
         { command: "sortear", description: "Elegir ganador del sorteo" },
         { command: "reset", description: "Reiniciar el sorteo" },
@@ -1128,6 +1132,19 @@ async function handleMessage(message) {
   if (command === "/warn") {
     await handleWarnCommand(chat.id, chat.title || "", message);
     await cleanupCommandMessage(message);
+    return;
+  }
+
+  if (command === "/warns") {
+    await handleWarnsCommand(chat.id, chat.title || "", message);
+    await cleanupCommandMessage(message);
+    return;
+  }
+
+  if (command === "/clearwarns") {
+    await handleClearWarnsCommand(chat.id, chat.title || "", message);
+    await cleanupCommandMessage(message);
+    return;
   }
 }
 
@@ -2432,6 +2449,96 @@ async function handleWarnCommand(chatId, chatTitle = "", message) {
   await issueGroupWarning(message.chat, settings, target, "Warn manual de administrador");
 }
 
+function buildWarnUserLabel(userId, username, firstName) {
+  const label = username
+    ? `@${String(username).replace(/^@/, "")}`
+    : (String(firstName || "").trim() || String(userId || "Usuario"));
+
+  if (Number.isFinite(Number(userId))) {
+    return `<a href="tg://user?id=${Number(userId)}">${escapeHtml(label)}</a>`;
+  }
+
+  return escapeHtml(label);
+}
+
+async function handleWarnsCommand(chatId, chatTitle = "", message) {
+  if (!(await isDatabaseAvailable())) {
+    await sendMessage(chatId, tForLocale("es", "database_unavailable"));
+    return;
+  }
+
+  const settings = await ensureGroupSettings(chatId, chatTitle || "");
+
+  if (message.reply_to_message && message.reply_to_message.from) {
+    const target = message.reply_to_message.from;
+    const warningState = await getUserWarnings(chatId, target.id);
+    const count = Number(warningState.count || 0);
+
+    await sendMessage(
+      chatId,
+      [
+        "<b>Advertencias del usuario</b>",
+        "",
+        buildWarnUserLabel(target.id, target.username, target.first_name),
+        `Warns acumulados: <b>${count}</b>`,
+        warningState.last_reason ? `Ultimo motivo: <b>${escapeHtml(warningState.last_reason)}</b>` : null,
+        warningState.last_warned_at ? `Ultima advertencia: <b>${escapeHtml(warningState.last_warned_at)}</b>` : null
+      ].filter(Boolean).join("\n")
+    );
+    return;
+  }
+
+  const warnings = await listWarningSnapshots(chatId);
+  if (!warnings.length) {
+    await sendMessage(chatId, "<b>Warns del grupo</b>\n\nNo hay advertencias registradas.");
+    return;
+  }
+
+  const lines = ["<b>Warns del grupo</b>", ""];
+  warnings.slice(0, 10).forEach((entry, index) => {
+    lines.push(`${index + 1}. ${buildWarnUserLabel(entry.user_id, entry.username, entry.first_name)} - <b>${Number(entry.count || 0)}</b>`);
+  });
+
+  await sendMessage(chatId, lines.join("\n"));
+}
+
+async function handleClearWarnsCommand(chatId, chatTitle = "", message) {
+  if (!(await isDatabaseAvailable())) {
+    await sendMessage(chatId, tForLocale("es", "database_unavailable"));
+    return;
+  }
+
+  const settings = await ensureGroupSettings(chatId, chatTitle || "");
+
+  if (!message.reply_to_message || !message.reply_to_message.from) {
+    await sendMessage(chatId, "Responde al usuario al que deseas limpiar las advertencias.");
+    return;
+  }
+
+  const target = message.reply_to_message.from;
+  await resetUserWarnings(chatId, target.id);
+
+  await appendGroupActivityLog(chatId, {
+    type: "warning",
+    title: "Advertencias limpiadas",
+    summary: `${target.username ? `@${target.username}` : (target.first_name || "Usuario")} - limpiadas por admin`
+  }).catch(() => null);
+
+  await sendLogEvent(settings, "Advertencias limpiadas", [
+    `Grupo: <b>${escapeHtml(chatTitle || tForSettings(settings, "group_title_fallback"))}</b>`,
+    `Usuario: <b>${escapeHtml(target.username ? `@${target.username}` : (target.first_name || "Usuario"))}</b>`
+  ]);
+
+  await sendMessage(
+    chatId,
+    [
+      "<b>Advertencias limpiadas</b>",
+      "",
+      buildWarnUserLabel(target.id, target.username, target.first_name)
+    ].join("\n")
+  );
+}
+
 async function handleStaffCommand(chatId, chatTitle = "") {
   const settings = await ensureGroupSettings(chatId, chatTitle || "");
   const admins = await getChatAdministrators(chatId);
@@ -2524,12 +2631,20 @@ async function handleAnnounceCommand(chat, from, message, text) {
 
   const announcementText = String(text || "").replace(/^\/announce(@[^\s]+)?/i, "").trim();
   const deliveredGroups = [];
+  const historyPreview = announcementText
+    ? announcementText.slice(0, 180)
+    : (message.reply_to_message && (message.reply_to_message.text || message.reply_to_message.caption || "Mensaje reenviado"));
 
   for (const group of targets) {
     if (message.reply_to_message) {
       const copied = await copyMessage(group.chat_id, chat.id, message.reply_to_message.message_id).catch(() => null);
       if (copied && copied.ok) {
         deliveredGroups.push(group.chat_title || String(group.chat_id));
+        await appendGroupActivityLog(group.chat_id, {
+          type: "announcement",
+          title: "Anuncio recibido",
+          summary: `Desde customer service: ${historyPreview || "Mensaje reenviado"}`
+        }).catch(() => null);
       }
       continue;
     }
@@ -2541,6 +2656,11 @@ async function handleAnnounceCommand(chat, from, message, text) {
     const sent = await sendMessage(group.chat_id, announcementText).catch(() => null);
     if (sent && sent.ok) {
       deliveredGroups.push(group.chat_title || String(group.chat_id));
+      await appendGroupActivityLog(group.chat_id, {
+        type: "announcement",
+        title: "Anuncio recibido",
+        summary: `Desde customer service: ${historyPreview || "Anuncio"}`
+      }).catch(() => null);
     }
   }
 
@@ -2556,6 +2676,12 @@ async function handleAnnounceCommand(chat, from, message, text) {
     await sendMessage(chat.id, "No se pudo enviar el mensaje a los grupos conectados.").catch(() => null);
     return;
   }
+
+  await appendGroupActivityLog(chat.id, {
+    type: "announcement",
+    title: "Anuncio distribuido",
+    summary: `Enviado a ${deliveredGroups.length} grupos`
+  }).catch(() => null);
 
   await sendMessage(
     chat.id,
