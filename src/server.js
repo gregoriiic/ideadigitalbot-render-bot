@@ -96,8 +96,13 @@ const activeWelcomeMessages = new Map();
 const activeWelcomeDeleteTimers = new Map();
 const commandSyncTracker = new Map();
 const activeJoinChallenges = new Map();
+const recentJoinTracker = new Map();
+const activeRaidProtection = new Map();
 const TICKET_INACTIVITY_MS = 10 * 60 * 1000;
 const COMMAND_SYNC_INTERVAL_MS = 10 * 60 * 1000;
+const ANTI_RAID_JOIN_THRESHOLD = 5;
+const ANTI_RAID_WINDOW_MS = 60 * 1000;
+const ANTI_RAID_HOLD_MS = 10 * 60 * 1000;
 const FREE_CONFIG_ACTIONS = new Set([
   "welcome",
   "welcome_autodelete",
@@ -1005,6 +1010,12 @@ async function handleMessage(message) {
       return;
     }
     await maybeHandleAntispam(chat, from, message);
+    if (premiumActive && text) {
+      const keywordHandled = await handleKeywordAutoReply(chat, from, text);
+      if (keywordHandled) {
+        return;
+      }
+    }
     if (premiumActive) {
       await maybeHandleAutoTranslation(chat, from, message, groupSettings);
     }
@@ -2605,6 +2616,30 @@ async function handleCustomGroupCommand(chat, from, message, command) {
   });
 
   await sendMessage(chat.id, rendered);
+  return true;
+}
+
+async function handleKeywordAutoReply(chat, from, text) {
+  const settings = await ensureGroupSettings(chat.id, chat.title || "");
+  const keywordReply = findKeywordReply(settings.custom_commands_text, text, Boolean(await isGroupAdmin(chat.id, from.id)));
+
+  if (!keywordReply) {
+    return false;
+  }
+
+  const rendered = renderTemplate(keywordReply.reply, {
+    first_name: from.first_name || tForSettings(settings, "user_fallback"),
+    full_name: [from.first_name, from.last_name].filter(Boolean).join(" "),
+    username: from.username ? `@${from.username}` : from.first_name || tForSettings(settings, "user_fallback"),
+    group: chat.title || tForSettings(settings, "group_title_fallback")
+  });
+
+  await sendMessage(chat.id, rendered).catch(() => null);
+  await appendGroupActivityLog(chat.id, {
+    type: "automation",
+    title: "Auto-respuesta enviada",
+    summary: `Keyword: ${keywordReply.keyword}`
+  }).catch(() => null);
   return true;
 }
 
@@ -5006,9 +5041,49 @@ function parseCustomCommands(source) {
     .filter(Boolean);
 }
 
+function parseKeywordReplies(source) {
+  return String(source || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const match = line.match(/^(.+?)(?:\s*\|\s*(admin|all))?\s*=>\s*(.+)$/i);
+      if (!match) {
+        return null;
+      }
+
+      const keyword = String(match[1] || "").trim();
+      if (!keyword || keyword.startsWith("/")) {
+        return null;
+      }
+
+      return {
+        keyword: keyword.toLowerCase(),
+        scope: String(match[2] || "all").toLowerCase(),
+        reply: String(match[3] || "").trim()
+      };
+    })
+    .filter(Boolean);
+}
+
 function findCustomCommand(source, command) {
   const target = String(command || "").toLowerCase();
   return parseCustomCommands(source).find((item) => item.command === target) || null;
+}
+
+function findKeywordReply(source, text, isAdmin = false) {
+  const target = String(text || "").trim().toLowerCase();
+  if (!target) {
+    return null;
+  }
+
+  return parseKeywordReplies(source).find((item) => {
+    if (item.scope === "admin" && !isAdmin) {
+      return false;
+    }
+
+    return target.includes(item.keyword);
+  }) || null;
 }
 
 function parseWelcomeDeleteSeconds(value) {
@@ -5024,13 +5099,63 @@ function getCaptchaTimeoutSeconds(settings) {
   return parseDurationToSeconds(settings.captcha_timeout_text || "5 m");
 }
 
+function getEffectiveJoinGateMode(chatId, settings, incomingCount = 1) {
+  const now = Date.now();
+  const explicitMode = String(settings.captcha_mode || "off").toLowerCase();
+  const existingRaid = activeRaidProtection.get(chatId);
+
+  if (existingRaid && existingRaid.expiresAt > now) {
+    return existingRaid.mode;
+  }
+
+  if (existingRaid && existingRaid.expiresAt <= now) {
+    activeRaidProtection.delete(chatId);
+  }
+
+  const recent = (recentJoinTracker.get(chatId) || []).filter((ts) => now - ts <= ANTI_RAID_WINDOW_MS);
+  for (let index = 0; index < Math.max(1, incomingCount); index += 1) {
+    recent.push(now);
+  }
+  recentJoinTracker.set(chatId, recent);
+
+  if (explicitMode === "captcha" || explicitMode === "approval") {
+    return explicitMode;
+  }
+
+  if (recent.length >= ANTI_RAID_JOIN_THRESHOLD) {
+    activeRaidProtection.set(chatId, {
+      mode: "captcha",
+      expiresAt: now + ANTI_RAID_HOLD_MS
+    });
+    return "captcha";
+  }
+
+  return "off";
+}
+
 async function handleJoinGate(chat, newMembers) {
   const settings = await ensureGroupSettings(chat.id, chat.title || "");
-  const mode = String(settings.captcha_mode || "off").toLowerCase();
+  const configuredMode = String(settings.captcha_mode || "off").toLowerCase();
+  const mode = getEffectiveJoinGateMode(chat.id, settings, Array.isArray(newMembers) ? newMembers.length : 1);
 
   if (mode !== "captcha" && mode !== "approval") {
     await handleWelcomeMessage(chat, newMembers);
     return;
+  }
+
+  if (configuredMode === "off" && mode === "captcha") {
+    const recentCount = (recentJoinTracker.get(chat.id) || []).length;
+    await appendGroupActivityLog(chat.id, {
+      type: "security",
+      title: "Anti-raid activado",
+      summary: `${recentCount} ingresos detectados en menos de 60 segundos`
+    }).catch(() => null);
+
+    await sendLogEvent(settings, "Anti-raid activado", [
+      `Grupo: <b>${escapeHtml(chat.title || tForSettings(settings, "group_title_fallback"))}</b>`,
+      `Ingresos detectados: <b>${recentCount}</b>`,
+      `Proteccion temporal: <b>Captcha automatico</b>`
+    ]);
   }
 
   const timeoutSeconds = Math.max(60, getCaptchaTimeoutSeconds(settings));
