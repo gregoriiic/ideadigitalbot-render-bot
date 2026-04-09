@@ -98,11 +98,13 @@ const commandSyncTracker = new Map();
 const activeJoinChallenges = new Map();
 const recentJoinTracker = new Map();
 const activeRaidProtection = new Map();
+let backgroundJobsStarted = false;
 const TICKET_INACTIVITY_MS = 10 * 60 * 1000;
 const COMMAND_SYNC_INTERVAL_MS = 10 * 60 * 1000;
 const ANTI_RAID_JOIN_THRESHOLD = 5;
 const ANTI_RAID_WINDOW_MS = 60 * 1000;
 const ANTI_RAID_HOLD_MS = 10 * 60 * 1000;
+const PREMIUM_REMINDER_INTERVAL_MS = 15 * 60 * 1000;
 const FREE_CONFIG_ACTIONS = new Set([
   "welcome",
   "welcome_autodelete",
@@ -134,6 +136,15 @@ function formatPremiumDate(value) {
     timeStyle: "short",
     timeZone: "America/Lima"
   });
+}
+
+function hoursUntil(value) {
+  const parsed = new Date(value || "").getTime();
+  if (!parsed || Number.isNaN(parsed)) {
+    return null;
+  }
+
+  return (parsed - Date.now()) / (1000 * 60 * 60);
 }
 
 function isPremiumActive(bot = currentBot()) {
@@ -725,7 +736,10 @@ app.post("/api/panel/admin/subscriptions/:botId", async (req, res) => {
       premium_activated_at: activatedAt,
       premium_until: premiumUntil,
       subscription_months: months,
-      subscription_updated_by: activatedBy
+      subscription_updated_by: activatedBy,
+      premium_reminder_7d_at: null,
+      premium_reminder_1d_at: null,
+      premium_expired_notified_at: null
     });
 
     if (!bot) {
@@ -762,7 +776,10 @@ app.post("/api/panel/admin/subscriptions/:botId/deactivate", async (req, res) =>
     const bot = await updateBotSubscription(botId, {
       subscription_status: "inactive",
       premium_until: null,
-      subscription_updated_by: activatedBy
+      subscription_updated_by: activatedBy,
+      premium_reminder_7d_at: null,
+      premium_reminder_1d_at: null,
+      premium_expired_notified_at: null
     });
 
     if (!bot) {
@@ -4858,15 +4875,19 @@ async function maybeHandleAutoTranslation(chat, from, message, settings) {
     return;
   }
 
-  const sourceLabel = from.username ? `@${from.username}` : (from.first_name || "Usuario");
+  const localeTitle = String(getLocaleLabel(targetLocale) || targetLocale || "Translation")
+    .trim()
+    .toUpperCase();
+
   await sendMessage(
     chat.id,
     [
-      "<b>Traduccion automatica</b>",
-      `De: <b>${escapeHtml(sourceLabel)}</b>`,
-      "",
+      `<b>${escapeHtml(localeTitle)}:</b>`,
       escapeHtml(translated)
-    ].join("\n")
+    ].join("\n"),
+    {
+      reply_to_message_id: Number(message.message_id)
+    }
   ).catch(() => null);
 }
 
@@ -5244,6 +5265,88 @@ function escapeHtml(value) {
     .replace(/'/g, "&#039;");
 }
 
+async function maybeSendPremiumReminders() {
+  const bots = await listAllBots().catch(() => []);
+  if (!Array.isArray(bots) || !bots.length) {
+    return;
+  }
+
+  for (const bot of bots) {
+    if (!bot || String(bot.status || "active") !== "active") {
+      continue;
+    }
+
+    if (String(bot.subscription_status || "inactive") !== "active") {
+      continue;
+    }
+
+    if (!bot.owner_telegram_id || !bot.premium_until) {
+      continue;
+    }
+
+    const remainingHours = hoursUntil(bot.premium_until);
+    if (remainingHours === null) {
+      continue;
+    }
+
+    const patch = {};
+    let message = "";
+
+    if (remainingHours <= 0 && !bot.premium_expired_notified_at) {
+      message = [
+        "<b>PREMIUM VENCIDO</b>",
+        "",
+        `Bot: ${escapeHtml(bot.bot_name || "Bot")}`,
+        `Vencio: ${escapeHtml(formatPremiumDate(bot.premium_until))}`,
+        "Renueva tu suscripcion desde la web para seguir usando funciones premium."
+      ].join("\n");
+      patch.premium_expired_notified_at = new Date().toISOString();
+      patch.subscription_status = "inactive";
+    } else if (remainingHours <= 24 && !bot.premium_reminder_1d_at) {
+      message = [
+        "<b>RECORDATORIO DE VENCIMIENTO</b>",
+        "",
+        `Bot: ${escapeHtml(bot.bot_name || "Bot")}`,
+        `Tu premium vence en menos de 1 dia.`,
+        `Vence: ${escapeHtml(formatPremiumDate(bot.premium_until))}`
+      ].join("\n");
+      patch.premium_reminder_1d_at = new Date().toISOString();
+    } else if (remainingHours <= 24 * 7 && !bot.premium_reminder_7d_at) {
+      message = [
+        "<b>RECORDATORIO DE VENCIMIENTO</b>",
+        "",
+        `Bot: ${escapeHtml(bot.bot_name || "Bot")}`,
+        `Tu premium vence en menos de 7 dias.`,
+        `Vence: ${escapeHtml(formatPremiumDate(bot.premium_until))}`
+      ].join("\n");
+      patch.premium_reminder_7d_at = new Date().toISOString();
+    }
+
+    if (!message) {
+      continue;
+    }
+
+    await runWithBot(bot, async () => {
+      await sendMessage(bot.owner_telegram_id, message).catch(() => null);
+    });
+
+    await updateBotSubscription(bot.id, patch).catch(() => null);
+  }
+}
+
+function startBackgroundJobs() {
+  if (backgroundJobsStarted) {
+    return;
+  }
+
+  backgroundJobsStarted = true;
+  setInterval(() => {
+    maybeSendPremiumReminders().catch(() => null);
+  }, PREMIUM_REMINDER_INTERVAL_MS);
+
+  maybeSendPremiumReminders().catch(() => null);
+}
+
 async function isDatabaseAvailable() {
   const status = await testDbConnection();
   return Boolean(status && status.ok);
@@ -5256,6 +5359,8 @@ async function startServer() {
   app.listen(config.port, "0.0.0.0", () => {
     console.log(`Ideadigital Bot backend listening on ${config.port}`);
   });
+
+  startBackgroundJobs();
 }
 
 startServer().catch((error) => {
