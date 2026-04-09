@@ -2872,6 +2872,12 @@ async function handleOpenPrivateTicketContinuation(message, text) {
     });
   }
 
+  await appendGroupActivityLog(openTicket.main_chat_id, {
+    type: "ticket",
+    title: `Ticket #${openTicket.ticket_number} actualizado`,
+    summary: `Nuevo mensaje del usuario: ${userLabel}`
+  }).catch(() => null);
+
   scheduleTicketAutoClose(updatedTicket || openTicket);
 }
 
@@ -2906,9 +2912,20 @@ async function handleSupportReply(chat, from, message) {
     ).catch(() => null);
   }
 
+  const replyAt = new Date().toISOString();
   const updatedTicket = await updateSupportTicket(ticket.id, {
-    last_activity_at: new Date().toISOString()
+    last_activity_at: replyAt,
+    last_support_reply_at: replyAt,
+    first_response_at: ticket.first_response_at || replyAt,
+    last_support_admin: from.username ? `@${String(from.username).replace(/^@/, "")}` : ([from.first_name, from.last_name].filter(Boolean).join(" ") || String(from.id)),
+    last_support_admin_id: from.id,
+    support_reply_count: Number(ticket.support_reply_count || 0) + 1
   });
+  await appendGroupActivityLog(ticket.main_chat_id, {
+    type: "ticket",
+    title: `Ticket #${ticket.ticket_number} respondido`,
+    summary: `Admin: ${from.username ? `@${from.username}` : (from.first_name || String(from.id))}`
+  }).catch(() => null);
   scheduleTicketAutoClose(updatedTicket || ticket);
   await sendMessage(chat.id, tForLocale("es", "ticket_reply_sent")).catch(() => null);
   return true;
