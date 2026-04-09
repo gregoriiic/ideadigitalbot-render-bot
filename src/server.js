@@ -2990,6 +2990,12 @@ async function handlePrivateTicketMessage(message, text, state) {
     title: `Ticket #${ticket.ticket_number} creado`,
     summary: `Usuario: ${userLabel}`
   }).catch(() => null);
+  await sendLogEvent(mainSettings, "Ticket creado", [
+    `Grupo: <b>${escapeHtml(mainSettings.chat_title || String(mainChatId))}</b>`,
+    `Ticket: <b>#${escapeHtml(ticket.ticket_number)}</b>`,
+    `Usuario: <b>${escapeHtml(userLabel)}</b>`,
+    `Mensaje: <b>${escapeHtml(messagePreview.slice(0, 180))}</b>`
+  ]);
   await sendMessage(
     message.chat.id,
     escapeHtml(tForLocale("es", "ticket_created", { number: ticket.ticket_number }))
@@ -3002,6 +3008,8 @@ async function handleOpenPrivateTicketContinuation(message, text) {
   if (!openTicket || openTicket.status !== "open") {
     return;
   }
+
+  const mainSettings = await ensureGroupSettings(openTicket.main_chat_id);
 
   const messagePreview = buildTicketMessagePreview(message, text);
 
@@ -3059,6 +3067,12 @@ async function handleOpenPrivateTicketContinuation(message, text) {
     title: `Ticket #${openTicket.ticket_number} actualizado`,
     summary: `Nuevo mensaje del usuario: ${userLabel}`
   }).catch(() => null);
+  await sendLogEvent(mainSettings, "Ticket actualizado", [
+    `Grupo: <b>${escapeHtml(mainSettings.chat_title || String(openTicket.main_chat_id))}</b>`,
+    `Ticket: <b>#${escapeHtml(openTicket.ticket_number)}</b>`,
+    `Usuario: <b>${escapeHtml(userLabel)}</b>`,
+    `Mensaje: <b>${escapeHtml(messagePreview.slice(0, 180))}</b>`
+  ]);
 
   scheduleTicketAutoClose(updatedTicket || openTicket);
 }
@@ -3076,6 +3090,8 @@ async function handleSupportReply(chat, from, message) {
   if (!ticket) {
     return false;
   }
+
+  const mainSettings = await ensureGroupSettings(ticket.main_chat_id);
 
   await sendMessage(
     ticket.user_id,
@@ -3108,6 +3124,12 @@ async function handleSupportReply(chat, from, message) {
     title: `Ticket #${ticket.ticket_number} respondido`,
     summary: `Admin: ${from.username ? `@${from.username}` : (from.first_name || String(from.id))}`
   }).catch(() => null);
+  await sendLogEvent(mainSettings, "Ticket respondido", [
+    `Grupo: <b>${escapeHtml(mainSettings.chat_title || String(ticket.main_chat_id))}</b>`,
+    `Ticket: <b>#${escapeHtml(ticket.ticket_number)}</b>`,
+    `Admin: <b>${escapeHtml(from.username ? `@${from.username}` : ([from.first_name, from.last_name].filter(Boolean).join(" ") || String(from.id)))}</b>`,
+    `Respuestas soporte: <b>${Number((updatedTicket || ticket).support_reply_count || 0)}</b>`
+  ]);
   scheduleTicketAutoClose(updatedTicket || ticket);
   await sendMessage(chat.id, tForLocale("es", "ticket_reply_sent")).catch(() => null);
   return true;
@@ -3142,11 +3164,17 @@ function scheduleTicketAutoClose(ticket) {
     }
 
     const closed = await closeSupportTicket(ticket.id, "inactive");
+    const mainSettings = await ensureGroupSettings(fresh.main_chat_id);
     await appendGroupActivityLog(fresh.main_chat_id, {
       type: "ticket",
       title: `Ticket #${fresh.ticket_number} cerrado`,
       summary: "Cerrado automaticamente por inactividad"
     }).catch(() => null);
+    await sendLogEvent(mainSettings, "Ticket cerrado", [
+      `Grupo: <b>${escapeHtml(mainSettings.chat_title || String(fresh.main_chat_id))}</b>`,
+      `Ticket: <b>#${escapeHtml(fresh.ticket_number)}</b>`,
+      "Motivo: <b>inactividad</b>"
+    ]);
     await sendMessage(
       fresh.user_id,
       escapeHtml(tForLocale("es", "ticket_closed_inactive", { number: fresh.ticket_number }))
