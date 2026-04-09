@@ -2907,10 +2907,14 @@ function formatAdminMention(item) {
 
 function staffRankWeight(rank) {
   if (rank === "Propietario") {
-    return 3;
+    return 4;
   }
 
   if (rank === "Co-Lider") {
+    return 3;
+  }
+
+  if (rank === "Lider") {
     return 2;
   }
 
@@ -2945,14 +2949,14 @@ function classifyAdmin(item, settings = { group_language: "es" }) {
   const permissionCount = countAdminPermissions(item);
 
   if (permissionCount >= 8) {
-    return "Propietario";
-  }
-
-  if (permissionCount >= 5) {
     return "Co-Lider";
   }
 
-  return "Lider";
+  if (permissionCount >= 4) {
+    return "Lider";
+  }
+
+  return "Administrador";
 }
 
 async function handleWelcomeMessage(chat, newMembers) {
