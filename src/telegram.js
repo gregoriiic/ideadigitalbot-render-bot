@@ -97,7 +97,13 @@ async function setWebhook(webhookUrl, explicitToken = "") {
   return telegramRequest("setWebhook", {
     url: webhookUrl,
     secret_token: config.webhookSecret || undefined,
-    allowed_updates: ["message", "callback_query"]
+    allowed_updates: ["message", "callback_query", "managed_bot"]
+  }, explicitToken);
+}
+
+async function getManagedBotToken(userId, explicitToken = "") {
+  return telegramRequest("getManagedBotToken", {
+    user_id: userId
   }, explicitToken);
 }
 
@@ -187,6 +193,7 @@ module.exports = {
   getChatMember,
   getChatAdministrators,
   setWebhook,
+  getManagedBotToken,
   deleteWebhook,
   restrictChatMember,
   allowChatMember,

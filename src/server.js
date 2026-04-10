@@ -17,6 +17,7 @@ const {
   getChatMember,
   getChatAdministrators,
   setWebhook,
+  getManagedBotToken,
   deleteWebhook,
   restrictChatMember,
   allowChatMember,
@@ -136,6 +137,15 @@ function formatPremiumDate(value) {
     timeStyle: "short",
     timeZone: "America/Lima"
   });
+}
+
+function formatTelegramDisplayName(user = {}) {
+  const username = String(user.username || "").trim();
+  if (username) {
+    return `@${username.replace(/^@/, "")}`;
+  }
+
+  return [user.first_name, user.last_name].filter(Boolean).join(" ").trim() || "Usuario";
 }
 
 function hoursUntil(value) {
@@ -933,6 +943,11 @@ app.post("/telegram/webhook/:webhookKey", async (req, res) => {
 
 async function processTelegramUpdate(update, bot, res) {
   return runWithBot(bot, async () => {
+    if (update.managed_bot) {
+      await handleManagedBotUpdate(update.managed_bot);
+      return res.json({ ok: true, update: "managed_bot", bot_id: bot ? bot.id : "default" });
+    }
+
     if (update.callback_query) {
       await handleCallbackQuery(update.callback_query);
       return res.json({ ok: true, update: "callback_query", bot_id: bot ? bot.id : "default" });
@@ -975,6 +990,105 @@ function isPanelTokenValid(req) {
   }
 
   return crypto.timingSafeEqual(Buffer.from(incoming), Buffer.from(expected));
+}
+
+async function handleManagedBotUpdate(managedBot) {
+  const ownerUser = managedBot && managedBot.user ? managedBot.user : {};
+  const botUser = managedBot && managedBot.bot ? managedBot.bot : {};
+  const ownerTelegramId = ownerUser.id ? String(ownerUser.id) : "";
+  const botUserId = botUser.id ? String(botUser.id) : "";
+  const botUsername = String(botUser.username || "").replace(/^@/, "").trim();
+  const botName = [botUser.first_name, botUser.last_name].filter(Boolean).join(" ").trim() || botUsername || "Managed Bot";
+
+  if (!ownerTelegramId || !botUserId || !botUsername) {
+    return;
+  }
+
+  const ownerKey = `tg:${ownerTelegramId}`;
+  const ownerBots = await listBotsByOwner(ownerKey).catch(() => []);
+  const sameBot = ownerBots.find((item) => {
+    const itemUserId = String(item.bot_user_id || "").trim();
+    const itemUsername = String(item.bot_username || "").replace(/^@/, "").trim().toLowerCase();
+    return itemUserId === botUserId || itemUsername === botUsername.toLowerCase();
+  }) || null;
+
+  const otherActiveBot = ownerBots.find((item) => {
+    if (sameBot && String(item.id) === String(sameBot.id)) {
+      return false;
+    }
+
+    return String(item.status || "active") === "active";
+  }) || null;
+
+  if (otherActiveBot && !sameBot) {
+    await sendMessage(
+      Number(ownerTelegramId),
+      [
+        "<b>No se pudo conectar el nuevo bot</b>",
+        "",
+        "Tu suscripcion solo permite <b>1 bot activo</b>.",
+        "Desconecta el bot actual desde la web antes de crear otro clon."
+      ].join("\n")
+    ).catch(() => null);
+    return;
+  }
+
+  const tokenResult = await getManagedBotToken(Number(botUserId)).catch(() => null);
+  const managedToken = tokenResult && tokenResult.ok ? String(tokenResult.result || "").trim() : "";
+
+  if (!managedToken) {
+    await sendMessage(
+      Number(ownerTelegramId),
+      [
+        "<b>No se pudo completar la conexion automatica</b>",
+        "",
+        `Telegram creo el bot <b>@${escapeHtml(botUsername)}</b>, pero no fue posible obtener su token todavia.`
+      ].join("\n")
+    ).catch(() => null);
+    return;
+  }
+
+  const registered = await registerBot(
+    {
+      owner_key: ownerKey,
+      owner_name: formatTelegramDisplayName(ownerUser),
+      owner_telegram_id: ownerTelegramId
+    },
+    {
+      bot_name: botName,
+      bot_username: botUsername,
+      bot_user_id: botUserId,
+      bot_token: managedToken
+    }
+  );
+
+  if (!registered) {
+    return;
+  }
+
+  const webhookUrl = `${config.appUrl}/telegram/webhook/${registered.webhook_key}`;
+  await setWebhook(webhookUrl, registered.bot_token).catch(() => null);
+
+  await sendMessage(
+    Number(ownerTelegramId),
+    [
+      "<b>Bot conectado automaticamente</b>",
+      "",
+      `Bot: <b>@${escapeHtml(registered.bot_username || botUsername)}</b>`,
+      "Ya puedes verlo en la seccion <b>Bots</b> del panel web."
+    ].join("\n")
+  ).catch(() => null);
+
+  await sendMessage(
+    Number(ownerTelegramId),
+    [
+      "<b>Bot conectado correctamente</b>",
+      "",
+      "Bienvenido. Tu bot ya esta listo para configurarse y empezar a funcionar."
+    ].join("\n"),
+    {},
+    registered.bot_token
+  ).catch(() => null);
 }
 
 async function handleMessage(message) {
@@ -5517,6 +5631,14 @@ async function startServer() {
   app.listen(config.port, "0.0.0.0", () => {
     console.log(`Ideadigital Bot backend listening on ${config.port}`);
   });
+
+  if (config.appUrl && config.botToken) {
+    const webhookUrl = `${config.appUrl}/telegram/webhook`;
+    const webhookResult = await setWebhook(webhookUrl).catch(() => null);
+    if (webhookResult && webhookResult.ok) {
+      console.log(`Default webhook synced: ${webhookUrl}`);
+    }
+  }
 
   startBackgroundJobs();
 }

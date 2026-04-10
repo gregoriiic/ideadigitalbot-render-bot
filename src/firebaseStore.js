@@ -149,17 +149,46 @@ async function registerBot(owner, input) {
   const username = String(input.bot_username || "").replace(/^@/, "").trim();
   const token = String(input.bot_token || "").trim();
   const name = String(input.bot_name || "").trim();
+  const botUserId = input.bot_user_id === undefined || input.bot_user_id === null
+    ? ""
+    : String(input.bot_user_id).trim();
   const ownerKey = String(owner.owner_key || "").trim();
 
   if (!ownerKey || !username || !token || !name) {
     return null;
   }
 
-  const existing = await botsCollection()
-    .where("owner_key", "==", ownerKey)
-    .where("bot_username", "==", username)
-    .limit(1)
-    .get();
+  let existing = null;
+
+  if (botUserId) {
+    const byUserId = await botsCollection()
+      .where("bot_user_id", "==", botUserId)
+      .limit(1)
+      .get();
+
+    if (!byUserId.empty) {
+      existing = byUserId;
+    }
+  }
+
+  if (!existing) {
+    const byUsername = await botsCollection()
+      .where("bot_username", "==", username)
+      .limit(1)
+      .get();
+
+    if (!byUsername.empty) {
+      existing = byUsername;
+    }
+  }
+
+  if (!existing) {
+    existing = await botsCollection()
+      .where("owner_key", "==", ownerKey)
+      .where("bot_username", "==", username)
+      .limit(1)
+      .get();
+  }
 
   const ref = existing.empty ? botsCollection().doc() : existing.docs[0].ref;
   const webhookKey = existing.empty
@@ -172,6 +201,7 @@ async function registerBot(owner, input) {
     owner_telegram_id: owner.owner_telegram_id || null,
     bot_name: name,
     bot_username: username,
+    bot_user_id: botUserId || ((existing.docs[0].data() || {}).bot_user_id || null),
     bot_token: token,
     webhook_key: webhookKey,
     status: "active",
